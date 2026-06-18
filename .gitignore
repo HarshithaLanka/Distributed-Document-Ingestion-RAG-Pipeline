@@ -1,0 +1,18 @@
+#Virtual environment folder
+venv/
+
+# python cache files
+__pycache__/
+
+#Environment variables
+.env
+
+#Uploaded documents(These might be important documents which should not go to github)
+uploads/
+
+
+#Local temperory metadata database
+app/data/documents.json
+
+#Mac System file
+.DS_Store
