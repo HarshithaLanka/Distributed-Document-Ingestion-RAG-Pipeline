@@ -1,32 +1,33 @@
-# Import FastAPI to create the backend app.
+# Import FastAPI to create backend app.
 from fastapi import FastAPI
 
 # Import document router.
 from app.routes.document_routes import router as document_router
 
+# Import search router.
+from app.routes.search_routes import router as search_router
 
-# Create FastAPI application object.
+
+# Create FastAPI app.
 app = FastAPI(
-    # Title shown in Swagger UI.
     title="Production-Grade Document Intelligence and RAG Pipeline",
-
-    # Description shown in Swagger UI.
-    description="Week 1 backend for PDF upload, local storage, and metadata tracking.",
-
-    # Version of the API.
+    description="Backend for PDF upload, extraction, chunking, indexing, and vector search.",
     version="1.0.0"
 )
 
 
-# Create a simple health check API.
+# Health check API.
 @app.get("/health")
 def health_check():
-    # Return simple status response.
     return {
         "status": "ok",
         "message": "Document Intelligence API is running."
     }
 
 
-# Connect document routes to the main FastAPI app.
+# Connect document APIs.
 app.include_router(document_router)
+
+
+# Connect search APIs.
+app.include_router(search_router)

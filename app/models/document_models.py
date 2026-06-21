@@ -51,6 +51,9 @@ class DocumentMetadata(BaseModel):
 
     # Error message if any processing step fails.
     error_message: Optional[str] = None
+    
+    # Number of vectors indexed in Pinecone.
+vector_count: Optional[int] = None
 
 
 # This model is used when returning all uploaded documents.
@@ -126,3 +129,19 @@ class DocumentChunksResponse(BaseModel):
 
     # List of chunks.
     chunks: list[DocumentChunk]
+    
+
+
+# This model is used when document chunks are indexed in Pinecone.
+class DocumentIndexingResponse(BaseModel):
+    # Unique document ID.
+    document_id: str
+
+    # Current status after indexing.
+    status: str
+
+    # Number of vectors stored in Pinecone.
+    vector_count: int
+
+    # Human-readable message.
+    message: str

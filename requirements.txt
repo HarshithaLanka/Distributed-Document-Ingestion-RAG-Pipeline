@@ -2,3 +2,7 @@ fastapi
 uvicorn 
 python-multipart 
 pymupdf
+openai
+pinecone
+python-dotenv
+sentence-transformers

@@ -30,6 +30,9 @@ from app.models.document_models import DocumentExtractionResponse
 from app.models.document_models import DocumentChunkingResponse
 from app.models.document_models import DocumentChunksResponse
 from app.models.document_models import DocumentChunk
+from app.models.document_models import DocumentIndexingResponse
+from app.services.pinecone_service import index_document_chunks
+from app.services.chunking_service import load_chunks
 
 # Import ID generator function.
 from app.utils.id_generator import generate_document_id
@@ -316,3 +319,74 @@ def get_document_chunks(document_id: str):
         chunk_count=chunks_data["chunk_count"],
         chunks=chunk_items
     )
+    
+    
+# Create POST API to index document chunks into Pinecone.
+@router.post("/{document_id}/index", response_model=DocumentIndexingResponse)
+def index_document(document_id: str):
+    # Find document metadata using document_id.
+    document = get_document_by_id(document_id)
+
+    # If document does not exist, return 404.
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found."
+        )
+
+    # Check if chunks are created before indexing.
+    if document.get("chunks_path") is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Chunks must be created before indexing."
+        )
+
+    try:
+        # Update document status to indexing.
+        update_document_metadata(
+            document_id,
+            {
+                "status": "indexing",
+                "error_message": None
+            }
+        )
+
+        # Load chunks from chunks.json.
+        chunks_data = load_chunks(document["chunks_path"])
+
+        # Store chunk embeddings in Pinecone.
+        indexing_result = index_document_chunks(chunks_data)
+
+        # Update metadata after successful indexing.
+        update_document_metadata(
+            document_id,
+            {
+                "status": "indexed",
+                "vector_count": indexing_result["vector_count"],
+                "error_message": None
+            }
+        )
+
+        # Return clean response.
+        return DocumentIndexingResponse(
+            document_id=document_id,
+            status="indexed",
+            vector_count=indexing_result["vector_count"],
+            message="Document chunks indexed successfully."
+        )
+
+    except Exception as error:
+        # Update status to failed if indexing fails.
+        update_document_metadata(
+            document_id,
+            {
+                "status": "failed",
+                "error_message": str(error)
+            }
+        )
+
+        # Return clean error.
+        raise HTTPException(
+            status_code=500,
+            detail=f"Indexing failed: {str(error)}"
+        )
