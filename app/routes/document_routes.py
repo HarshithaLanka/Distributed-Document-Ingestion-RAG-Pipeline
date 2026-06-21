@@ -22,6 +22,9 @@ from fastapi import HTTPException
 from app.models.document_models import DocumentUploadResponse
 from app.models.document_models import DocumentListResponse
 from app.models.document_models import DocumentMetadata
+from app.models.document_models import DocumentExtractionResponse
+from app.services.metadata_service import update_document_metadata
+from app.services.pdf_parser_service import extract_text_from_pdf
 
 # Import ID generator function.
 from app.utils.id_generator import generate_document_id
@@ -122,3 +125,67 @@ def get_document(document_id: str):
 
     # Return the matching document.
     return DocumentMetadata(**document)
+# Create POST API to extract text from an uploaded PDF.
+@router.post("/{document_id}/extract", response_model=DocumentExtractionResponse)
+def extract_document(document_id: str):
+    # Find document metadata using document_id.
+    document = get_document_by_id(document_id)
+
+    # If document does not exist, return 404 error.
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found."
+        )
+
+    try:
+        # Update document status to extracting.
+        update_document_metadata(
+            document_id,
+            {
+                "status": "extracting",
+                "error_message": None
+            }
+        )
+
+        # Extract text from PDF using parser service.
+        extraction_result = extract_text_from_pdf(
+            file_path=document["file_path"],
+            document_id=document_id
+        )
+
+        # Update document metadata after successful extraction.
+        update_document_metadata(
+            document_id,
+            {
+                "status": "extracted",
+                "page_count": extraction_result["page_count"],
+                "extracted_text_path": extraction_result["extracted_text_path"],
+                "error_message": None
+            }
+        )
+
+        # Return clean response.
+        return DocumentExtractionResponse(
+            document_id=document_id,
+            status="extracted",
+            page_count=extraction_result["page_count"],
+            extracted_text_path=extraction_result["extracted_text_path"],
+            message="Text extracted successfully."
+        )
+
+    except Exception as error:
+        # If anything fails, update status to failed.
+        update_document_metadata(
+            document_id,
+            {
+                "status": "failed",
+                "error_message": str(error)
+            }
+        )
+
+        # Return clean 500 error.
+        raise HTTPException(
+            status_code=500,
+            detail=f"Text extraction failed: {str(error)}"
+        )

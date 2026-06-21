@@ -62,3 +62,26 @@ def get_document_by_id(document_id:str)-> Optional[dict]:
     #if no document matched ,return
     return None
         
+# Define a function to update metadata for one document.
+def update_document_metadata(document_id: str, updates: dict) -> Optional[dict]:
+    # Load all existing documents.
+    documents = load_documents()
+
+    # Loop through all documents with index.
+    for index, document in enumerate(documents):
+        # Check if current document matches requested document_id.
+        if document["document_id"] == document_id:
+            # Update the document dictionary with new values.
+            document.update(updates)
+
+            # Replace old document with updated document.
+            documents[index] = document
+
+            # Save updated documents back to JSON.
+            save_documents(documents)
+
+            # Return updated document.
+            return document
+
+    # If document_id is not found, return None.
+    return None
