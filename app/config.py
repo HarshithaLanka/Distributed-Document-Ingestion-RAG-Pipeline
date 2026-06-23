@@ -45,7 +45,7 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
 
 # Pinecone index name.
-PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "document-rag-index")
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "document-rag-index-384")
 
 
 # Pinecone cloud provider.
@@ -71,3 +71,18 @@ EMBEDDING_MODEL = os.getenv(
 # Embedding dimension.
 # all-MiniLM-L6-v2 creates 384-dimensional embeddings.
 EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "384"))
+
+
+# LLM provider.
+# For now, we use Ollama locally.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
+
+
+# Ollama base URL.
+# Ollama runs locally on port 11434 by default.
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+
+
+# Ollama model name.
+# This must match one model from `ollama ls`.
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:1.5b")

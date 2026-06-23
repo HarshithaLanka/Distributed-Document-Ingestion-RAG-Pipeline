@@ -6,3 +6,5 @@ openai
 pinecone
 python-dotenv
 sentence-transformers
+openai
+requests
