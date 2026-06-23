@@ -1,71 +1,88 @@
-# This file handles local LLM calls using Ollama.
+# Import os so we can read Ollama settings from environment variables.
+import os
 
-# Import requests to call Ollama local HTTP API.
+# Import json so we can parse JSON responses from the LLM.
+import json
+
+# Import requests so Python can call the local Ollama API.
 import requests
 
-# Import Ollama settings from config.py.
-from app.config import OLLAMA_BASE_URL
-from app.config import OLLAMA_MODEL
+# Import HTTPException so FastAPI can return a clean error if Ollama fails.
+from fastapi import HTTPException
 
 
-# Generate answer using local Ollama model.
-def generate_answer_with_ollama(prompt: str) -> str:
-    # Create Ollama generate API URL.
+# Read Ollama base URL from environment variable.
+# If the variable is missing, use the default local Ollama URL.
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+
+# Read Ollama model name from environment variable.
+# If the variable is missing, use your current local model.
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:1.5b")
+
+
+# This function sends a prompt to Ollama and returns the raw text response.
+def generate_answer_from_ollama(prompt: str) -> str:
+    # Build the full Ollama generate API URL.
     url = f"{OLLAMA_BASE_URL}/api/generate"
 
-    # Strong system instruction for document Q&A.
-    system_prompt = (
-        "You are a strict document extraction assistant. "
-        "Your job is to read the provided document context and answer the user's question. "
-        "Use only the document context. "
-        "Do not use outside knowledge. "
-        "If the answer is present in the context, extract it directly. "
-        "If the answer is not present in the context, say exactly: "
-        "'I could not find this information in the document.' "
-        "Do not say the context does not provide information if the answer appears in the context."
-    )
-
-    # Create request payload for Ollama.
+    # Create the request body that Ollama expects.
     payload = {
-        # Model name from .env.
+        # This tells Ollama which local model to use.
         "model": OLLAMA_MODEL,
 
-        # System prompt controls model behavior.
-        "system": system_prompt,
-
-        # Main prompt contains retrieved chunks + question.
+        # This is the full RAG prompt containing context and question.
         "prompt": prompt,
 
-        # stream=False means return one full response.
+        # This tells Ollama to return one full response instead of streaming tokens.
         "stream": False,
 
-        # Low temperature makes answer less creative and more factual.
+        # Options control how the model behaves.
         "options": {
-            "temperature": 0.0
+            # Low temperature makes answers more stable and less creative.
+            "temperature": 0.1,
+
+            # This limits the answer length so small local models do not ramble.
+            "num_predict": 700
         }
     }
 
-    # Send request to Ollama.
-    response = requests.post(
-        url,
-        json=payload,
-        timeout=120
-    )
+    try:
+        # Send the POST request to Ollama.
+        response = requests.post(url, json=payload, timeout=120)
 
-    # Raise error if Ollama request failed.
-    response.raise_for_status()
+        # Raise an error if Ollama returns a bad HTTP status.
+        response.raise_for_status()
 
-    # Convert response JSON to Python dictionary.
+    except requests.exceptions.RequestException as error:
+        # Return a clean FastAPI error if Ollama is not running or failed.
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ollama request failed: {str(error)}"
+        )
+
+    # Convert Ollama's JSON response into a Python dictionary.
     data = response.json()
 
-    # Extract answer text.
-    answer = data.get("response", "")
-
-    # Return cleaned answer.
-    return answer.strip()
+    # Return the generated response text from Ollama.
+    return data.get("response", "").strip()
 
 
-# Keep this function name so your old qa_service.py import does not break.
-def generate_answer_with_grok(prompt: str) -> str:
-    # Internally use Ollama instead of Grok.
-    return generate_answer_with_ollama(prompt)
+# This function safely tries to parse the LLM response as JSON.
+def parse_llm_json_response(raw_response: str) -> dict:
+    # Remove extra spaces around the raw response.
+    cleaned_response = raw_response.strip()
+
+    # Some models wrap JSON inside markdown code fences, so remove them.
+    cleaned_response = cleaned_response.replace("```json", "").replace("```", "").strip()
+
+    try:
+        # Try to convert the cleaned response into a Python dictionary.
+        return json.loads(cleaned_response)
+
+    except json.JSONDecodeError:
+        # If JSON parsing fails, return a safe fallback response.
+        return {
+            "answer": "I could not find this information in the document.",
+            "used_chunk_ids": [],
+            "answer_status": "not_found"
+        }

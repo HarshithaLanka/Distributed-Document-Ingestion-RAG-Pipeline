@@ -193,3 +193,64 @@ def search_similar_chunks(document_id: str, query: str, top_k: int = 3) -> list[
 
     # Return search results.
     return results
+
+# Define a function to search Pinecone using an already-created embedding vector.
+# This function is mainly used by qa_service.py.
+def search_vectors(query_embedding: list[float], document_id: str, top_k: int = 5) -> list[dict]:
+    # Get Pinecone index.
+    index = ensure_pinecone_index()
+
+    # Query Pinecone using the question embedding.
+    # Here we do not generate embedding again because qa_service.py already created it.
+    query_result = index.query(
+        # Use the same namespace where document chunks were stored.
+        namespace=PINECONE_NAMESPACE,
+
+        # Send the query embedding vector to Pinecone.
+        vector=query_embedding,
+
+        # Ask Pinecone to return top matching chunks.
+        top_k=top_k,
+
+        # Search only inside the selected document.
+        filter={
+            "document_id": {
+                "$eq": document_id
+            }
+        },
+
+        # Return metadata because metadata contains chunk_id, page_number, and source_text.
+        include_metadata=True,
+
+        # Do not return vector values because we do not need raw embeddings in the answer.
+        include_values=False
+    )
+
+    # Create an empty list to store clean Pinecone matches.
+    results = []
+
+    # Loop through every match returned by Pinecone.
+    for match in query_result.matches:
+        # Get metadata from Pinecone match.
+        metadata = match.metadata or {}
+
+        # Add match in the format expected by qa_service.py.
+        results.append(
+            {
+                # Store Pinecone similarity score.
+                "score": match.score,
+
+                # Store metadata inside a metadata key.
+                # qa_service.py expects this structure.
+                "metadata": {
+                    "document_id": metadata.get("document_id"),
+                    "chunk_id": metadata.get("chunk_id"),
+                    "page_number": metadata.get("page_number"),
+                    "word_count": metadata.get("word_count"),
+                    "source_text": metadata.get("source_text")
+                }
+            }
+        )
+
+    # Return clean matches.
+    return results
