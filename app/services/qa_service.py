@@ -170,6 +170,71 @@ SKILL_TECH_KEYWORDS = [
 ]
 
 
+# These are common words that do not help exact keyword matching.
+# Example:
+# "Explain about FixMyMill Project she mentioned"
+# Useful word is "FixMyMill", not "explain", "about", "project", "she", "mentioned".
+STOPWORDS = {
+    "what",
+    "which",
+    "who",
+    "whom",
+    "whose",
+    "where",
+    "when",
+    "why",
+    "how",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "the",
+    "a",
+    "an",
+    "about",
+    "explain",
+    "tell",
+    "me",
+    "mentioned",
+    "mention",
+    "from",
+    "in",
+    "this",
+    "that",
+    "these",
+    "those",
+    "document",
+    "pdf",
+    "project",
+    "she",
+    "he",
+    "they",
+    "it",
+    "her",
+    "his",
+    "their",
+    "of",
+    "for",
+    "to",
+    "and",
+    "or",
+    "with",
+    "did",
+    "does",
+    "do",
+    "know",
+    "give",
+    "briefly",
+    "list",
+    "show",
+    "details",
+    "detail",
+}
+
+
 # This function decides what type of question the user asked.
 def detect_question_type(question: str) -> str:
     # Convert the question to lowercase so pattern matching is easier.
@@ -209,6 +274,84 @@ def is_skill_or_technology_question(question: str) -> bool:
 
     # Return True if any skill/technology keyword appears in the question.
     return any(keyword in lower_question for keyword in SKILL_TECH_KEYWORDS)
+
+
+# This function extracts important words from the user's question.
+# This is used for lexical fallback.
+# Example:
+# "Explain about FixMyMill Project she mentioned"
+# becomes:
+# ["fixmymill"]
+def extract_important_keywords(question: str) -> List[str]:
+    # Find words that may contain letters, numbers, dot, hash, plus, colon, underscore, or hyphen.
+    words = re.findall(r"[A-Za-z0-9.#:+_-]+", question)
+
+    # Create an empty list to store useful keywords.
+    keywords = []
+
+    # Loop through every extracted word.
+    for word in words:
+        # Convert the word to lowercase.
+        cleaned_word = word.lower().strip()
+
+        # Skip very short words because they are usually not helpful.
+        if len(cleaned_word) < 3:
+            continue
+
+        # Skip common words that do not help retrieval.
+        if cleaned_word in STOPWORDS:
+            continue
+
+        # Add useful keyword.
+        keywords.append(cleaned_word)
+
+    # Remove duplicates while preserving order.
+    unique_keywords = list(dict.fromkeys(keywords))
+
+    # Return final keyword list.
+    return unique_keywords
+
+
+# This function extracts exact reference phrases from the question.
+# This is important for questions like:
+# "What is Week 6 plan?"
+# "What is Chapter 3 about?"
+# "Explain Section 2.1"
+# We want to match "week 6" exactly, not loose words like "week" and "6".
+def extract_exact_reference_phrases(question: str) -> List[str]:
+    # Convert question to lowercase.
+    lower_question = question.lower()
+
+    # These patterns capture common structured references inside documents.
+    reference_patterns = [
+        r"\bweek\s+\d+\b",
+        r"\bday\s+\d+\b",
+        r"\bchapter\s+\d+\b",
+        r"\bsection\s+\d+(?:\.\d+)*\b",
+        r"\bclause\s+\d+(?:\.\d+)*\b",
+        r"\bpage\s+\d+\b",
+        r"\bpart\s+\d+\b",
+        r"\bmodule\s+\d+\b",
+        r"\bunit\s+\d+\b",
+    ]
+
+    # Create an empty list for extracted phrases.
+    phrases = []
+
+    # Loop through each regex pattern.
+    for pattern in reference_patterns:
+        # Find all matching exact phrases.
+        matches = re.findall(pattern, lower_question)
+
+        # Add every match to the phrases list.
+        for match in matches:
+            phrases.append(match.strip())
+
+    # Remove duplicates while preserving order.
+    unique_phrases = list(dict.fromkeys(phrases))
+
+    # Return exact reference phrases.
+    return unique_phrases
 
 
 # This function builds a better search query for Pinecone.
@@ -651,6 +794,91 @@ def get_skill_technology_anchor_chunks(document_id: str, max_anchor_chunks: int 
     return [item[1] for item in scored_chunks[:max_anchor_chunks]]
 
 
+# This function searches local chunks using exact keyword overlap.
+# This is the lexical fallback.
+# It helps find exact names, company names, project names, IDs, tools, and technical terms
+# that vector search may miss.
+def get_keyword_overlap_chunks(
+    document_id: str,
+    question: str,
+    max_keyword_chunks: int = 3,
+) -> List[Dict[str, Any]]:
+    # Load chunks from local chunks.json.
+    local_chunks = load_local_chunks(document_id)
+
+    # If no local chunks exist, return empty list.
+    if not local_chunks:
+        return []
+
+    # Extract important keywords from the question.
+    keywords = extract_important_keywords(question)
+
+    # Extract exact structured phrases like "week 6", "chapter 3", "section 2.1".
+    exact_phrases = extract_exact_reference_phrases(question)
+
+    # If no useful keywords and no exact phrases exist, return empty list.
+    if not keywords and not exact_phrases:
+        return []
+
+    # First pass: strongly prefer exact phrase matches.
+    exact_scored_chunks = []
+
+    # Second pass: normal keyword overlap fallback.
+    keyword_scored_chunks = []
+
+    # Loop through every local chunk.
+    for chunk in local_chunks:
+        # Get source text.
+        source_text = chunk.get("source_text", "")
+
+        # Skip table of contents chunks.
+        if is_table_of_contents_chunk(source_text):
+            continue
+
+        # Convert chunk text to lowercase.
+        lower_text = source_text.lower()
+
+        # Count exact phrase matches like "week 6".
+        exact_phrase_matches = sum(
+            1 for phrase in exact_phrases if phrase in lower_text
+        )
+
+        # Count normal keyword matches like "fixmymill".
+        overlap_count = sum(
+            1 for keyword in keywords if keyword in lower_text
+        )
+
+        # Give small boost to early pages because resumes/reports often put important info early.
+        early_page_boost = 1 if chunk.get("page_number", 0) <= 3 else 0
+
+        # If exact phrase matched, store in exact phrase list with strong score.
+        if exact_phrase_matches > 0:
+            score = (exact_phrase_matches * 20) + overlap_count + early_page_boost
+            exact_scored_chunks.append((score, chunk))
+            continue
+
+        # If no exact phrase matched but keyword matched, store as normal fallback.
+        if overlap_count > 0:
+            score = overlap_count + early_page_boost
+            keyword_scored_chunks.append((score, chunk))
+
+    # If exact phrase matches exist, use only them first.
+    # This prevents "Week 6" questions from accidentally using "Day 6" chunks.
+    if exact_scored_chunks:
+        exact_scored_chunks.sort(
+            key=lambda item: (-item[0], item[1].get("page_number", 0))
+        )
+        return [item[1] for item in exact_scored_chunks[:max_keyword_chunks]]
+
+    # Otherwise, use normal keyword overlap chunks.
+    keyword_scored_chunks.sort(
+        key=lambda item: (-item[0], item[1].get("page_number", 0))
+    )
+
+    # Return top keyword-matched chunks.
+    return [item[1] for item in keyword_scored_chunks[:max_keyword_chunks]]
+
+
 # This function merges anchor chunks and Pinecone chunks without duplicates.
 def merge_and_deduplicate_chunks(
     first_chunks: List[Dict[str, Any]],
@@ -752,12 +980,13 @@ Very important rules:
 8. If the question asks "Who is X?", explain who X is based only on the document.
 9. If the question asks who the team members, students, authors, or submitted-by people are, use the names exactly as shown in the document context.
 10. If the question asks about skills, programming languages, technologies, tools, frameworks, databases, frontend, backend, or version control, answer only from the provided context.
-11. If the question asks what the document is about, summarize the main purpose of the document.
-12. For summary questions, prioritize title, abstract, introduction, overview, problem statement, proposed system, conclusion, and future scope if these are present in the context.
-13. Use the smallest number of chunks needed to support the answer.
-14. Use only chunk IDs that directly support the answer.
-15. If the answer is not clearly supported by the context, return answer_status as "not_found".
-16. Return valid JSON only. Do not return markdown.
+11. If the question asks about a specific week, day, chapter, section, clause, page, part, module, or unit, answer from that exact referenced section if present in the context.
+12. If the question asks what the document is about, summarize the main purpose of the document.
+13. For summary questions, prioritize title, abstract, introduction, overview, problem statement, proposed system, conclusion, and future scope if these are present in the context.
+14. Use the smallest number of chunks needed to support the answer.
+15. Use only chunk IDs that directly support the answer.
+16. If the answer is not clearly supported by the context, return answer_status as "not_found".
+17. Return valid JSON only. Do not return markdown.
 
 Question type:
 {question_type}
@@ -905,6 +1134,11 @@ def get_effective_min_score(question_type: str, requested_min_score: float, ques
     if question_type == "direct_factual" and is_skill_or_technology_question(question):
         return min(requested_min_score, 0.25)
 
+    # If question has exact references like Week 6 or Chapter 3,
+    # allow lower vector threshold because lexical fallback will handle exact matching.
+    if extract_exact_reference_phrases(question):
+        return min(requested_min_score, 0.25)
+
     # Other direct factual questions stay stricter.
     if question_type == "direct_factual":
         return requested_min_score
@@ -1013,7 +1247,23 @@ def answer_question(request: QARequest) -> QAResponse:
             max_total_chunks=5,
         )
 
-    # If no chunks are available after filtering/anchor merge, return not found.
+    # Generic lexical fallback.
+    # This helps exact names and references like:
+    # FixMyMill, YOLOv8, TastyThreads, Week 6, Chapter 3, Section 2.1, invoice numbers, policy names.
+    keyword_overlap_chunks = get_keyword_overlap_chunks(
+        document_id=request.document_id,
+        question=request.question,
+        max_keyword_chunks=3,
+    )
+
+    # Merge keyword chunks first, then existing filtered chunks.
+    filtered_chunks = merge_and_deduplicate_chunks(
+        first_chunks=keyword_overlap_chunks,
+        second_chunks=filtered_chunks,
+        max_total_chunks=5,
+    )
+
+    # If no chunks are available after filtering/anchor/keyword merge, return not found.
     if not filtered_chunks:
         return create_not_found_response(question_type)
 

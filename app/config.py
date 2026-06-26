@@ -86,3 +86,6 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 # Ollama model name.
 # This must match one model from `ollama ls`.
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:1.5b")
+
+
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
