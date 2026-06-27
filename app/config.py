@@ -219,3 +219,115 @@ def get_missing_dynamodb_settings():
 
     # Return missing settings list.
     return missing_settings
+
+# =========================
+# AWS SQS CONFIGURATION
+# =========================
+
+# SQS means Simple Queue Service.
+# In our project, SQS stores document processing jobs.
+# Example job: "process document_id = doc_123".
+
+# Read whether SQS is enabled from .env.
+# If SQS_ENABLED=true, our app is allowed to use SQS.
+# If missing, default is false for safety.
+SQS_ENABLED = os.getenv("SQS_ENABLED", "false").lower() == "true"
+
+
+# Read the main SQS queue name.
+# This is mostly useful for logs and debugging.
+# Example: document-rag-dev-processing-queue
+SQS_QUEUE_NAME = os.getenv("SQS_QUEUE_NAME")
+
+
+# Read the full SQS queue URL.
+# boto3 needs QueueUrl to send, receive, and delete messages.
+# Example:
+# https://sqs.ap-south-1.amazonaws.com/887690967435/document-rag-dev-processing-queue
+SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL")
+
+
+# Read the dead-letter queue name.
+# This queue stores failed jobs after retry limit.
+# We do not send normal jobs directly to this queue.
+SQS_DLQ_NAME = os.getenv("SQS_DLQ_NAME")
+
+
+# Read the AWS region for SQS.
+# If SQS_REGION is missing, use AWS_REGION.
+# If AWS_REGION is also missing, use ap-south-1 because your AWS resources are in Mumbai.
+SQS_REGION = os.getenv("SQS_REGION", os.getenv("AWS_REGION", "ap-south-1"))
+
+
+# Read long polling wait time.
+# Long polling means the worker waits for messages instead of checking repeatedly.
+# 20 seconds is the maximum value supported by SQS long polling.
+SQS_WAIT_TIME_SECONDS = int(os.getenv("SQS_WAIT_TIME_SECONDS", "20"))
+
+
+# Read visibility timeout.
+# Visibility timeout means:
+# once worker receives a message, SQS hides it for this many seconds.
+# 300 seconds = 5 minutes.
+SQS_VISIBILITY_TIMEOUT_SECONDS = int(os.getenv("SQS_VISIBILITY_TIMEOUT_SECONDS", "300"))
+
+
+# Read max number of messages to receive at once.
+# Keep this as 1 for now because we are learning and processing step by step.
+SQS_MAX_MESSAGES = int(os.getenv("SQS_MAX_MESSAGES", "1"))
+
+
+def is_sqs_configured() -> bool:
+    """
+    Check whether SQS has all required settings.
+
+    Simple meaning:
+    This function tells us whether our .env has enough values
+    for the app to talk to AWS SQS safely.
+    """
+
+    # If SQS is disabled, return False.
+    # This prevents accidental SQS calls.
+    if not SQS_ENABLED:
+        return False
+
+    # These values are required for real SQS usage.
+    required_values = [
+        SQS_QUEUE_NAME,
+        SQS_QUEUE_URL,
+        SQS_REGION,
+    ]
+
+    # all(required_values) returns True only if every value exists.
+    return all(required_values)
+
+
+def get_missing_sqs_settings() -> list[str]:
+    """
+    Return missing SQS settings.
+
+    Simple meaning:
+    If something is wrong in .env, this tells exactly what is missing.
+    """
+
+    # Create an empty list to store missing setting names.
+    missing_settings = []
+
+    # Check if SQS is enabled.
+    if not SQS_ENABLED:
+        missing_settings.append("SQS_ENABLED")
+
+    # Check if main queue name exists.
+    if not SQS_QUEUE_NAME:
+        missing_settings.append("SQS_QUEUE_NAME")
+
+    # Check if main queue URL exists.
+    if not SQS_QUEUE_URL:
+        missing_settings.append("SQS_QUEUE_URL")
+
+    # Check if region exists.
+    if not SQS_REGION:
+        missing_settings.append("SQS_REGION")
+
+    # Return the final list of missing settings.
+    return missing_settings
