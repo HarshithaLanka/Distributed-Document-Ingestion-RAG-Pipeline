@@ -331,3 +331,56 @@ def get_missing_sqs_settings() -> list[str]:
 
     # Return the final list of missing settings.
     return missing_settings
+
+# Add near your existing DynamoDB settings.
+
+# This controls whether event tracking is enabled.
+DYNAMODB_EVENTS_ENABLED = os.getenv("DYNAMODB_EVENTS_ENABLED", "false").lower() == "true"
+
+# This is the DynamoDB table where document event history will be saved.
+DYNAMODB_EVENTS_TABLE_NAME = os.getenv("DYNAMODB_EVENTS_TABLE_NAME", "")
+
+
+def is_dynamodb_events_configured() -> bool:
+    """
+    Check whether DynamoDB event tracking is configured.
+
+    This is separate from the main documents table.
+    Main table = current document metadata.
+    Events table = history/timeline of document processing.
+    """
+
+    return (
+        DYNAMODB_EVENTS_ENABLED
+        and bool(AWS_REGION)
+        and bool(AWS_ACCESS_KEY_ID)
+        and bool(AWS_SECRET_ACCESS_KEY)
+        and bool(DYNAMODB_EVENTS_TABLE_NAME)
+    )
+
+
+def get_missing_dynamodb_events_settings() -> list[str]:
+    """
+    Return missing event-table settings.
+
+    This is helpful for debugging .env issues.
+    """
+
+    missing = []
+
+    if not DYNAMODB_EVENTS_ENABLED:
+        missing.append("DYNAMODB_EVENTS_ENABLED")
+
+    if not AWS_REGION:
+        missing.append("AWS_REGION")
+
+    if not AWS_ACCESS_KEY_ID:
+        missing.append("AWS_ACCESS_KEY_ID")
+
+    if not AWS_SECRET_ACCESS_KEY:
+        missing.append("AWS_SECRET_ACCESS_KEY")
+
+    if not DYNAMODB_EVENTS_TABLE_NAME:
+        missing.append("DYNAMODB_EVENTS_TABLE_NAME")
+
+    return missing

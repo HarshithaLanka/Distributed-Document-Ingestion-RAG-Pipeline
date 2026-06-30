@@ -1,20 +1,27 @@
+# app/routes/document_routes.py
+
 """
 This file contains document APIs:
 
 POST /documents/upload
 GET /documents
 GET /documents/{document_id}
+GET /documents/{document_id}/status
+GET /documents/{document_id}/events
 POST /documents/{document_id}/extract
 POST /documents/{document_id}/chunk
 GET /documents/{document_id}/chunks
 POST /documents/{document_id}/index
 
-The route receives requests, but it does not directly manage all business logic.
-It calls services for storage, parsing, metadata, chunking, indexing, S3 upload,
-S3 fallback recovery, and SQS queue submission.
+Week 9 updates:
+- Added document status API.
+- Added document events API.
+- Added current_step and progress_percentage updates.
+- Added event logging.
+- Added retry/error tracking fields.
 """
 
-# Import datetime/timezone to store queued_at and queue_failed_at timestamps in UTC.
+# Import datetime/timezone to store timestamps in UTC.
 from datetime import datetime, timezone
 
 # Import APIRouter to create a separate group of document-related APIs.
@@ -26,10 +33,16 @@ from fastapi import UploadFile, File
 # Import HTTPException to return clean error responses.
 from fastapi import HTTPException
 
+# Import full config module for SQS queue name fallback.
+from app import config
+
 # Import config values that control cloud features.
-# S3_UPLOAD_ENABLED controls whether uploaded PDFs/artifacts go to S3.
-# SQS_ENABLED controls whether upload API sends processing jobs to SQS.
 from app.config import S3_UPLOAD_ENABLED, SQS_ENABLED
+
+# Import Week 9 status/event constants.
+from app.constants.document_status import DocumentStatus
+from app.constants.document_status import ProcessingStep
+from app.constants.document_status import DocumentEventType
 
 # Import artifact resolver functions.
 # These functions restore missing local files from S3 when local cache is missing.
@@ -48,6 +61,8 @@ from app.models.document_models import DocumentChunkingResponse
 from app.models.document_models import DocumentChunksResponse
 from app.models.document_models import DocumentChunk
 from app.models.document_models import DocumentIndexingResponse
+from app.models.document_models import DocumentStatusResponse
+from app.models.document_models import DocumentEventsResponse
 
 # Import ID generator function.
 from app.utils.id_generator import generate_document_id
@@ -62,8 +77,6 @@ from app.services.s3_service import upload_chunks_to_s3
 from app.services.s3_service import S3ServiceError
 
 # Import SQS service function.
-# This lets the upload API send only document_id to SQS.
-# The PDF itself stays in S3/local storage; SQS only stores the job instruction.
 from app.services.sqs_service import send_document_processing_message
 
 # Import metadata service functions.
@@ -71,6 +84,12 @@ from app.services.metadata_service import add_document_metadata
 from app.services.metadata_service import load_documents
 from app.services.metadata_service import get_document_by_id
 from app.services.metadata_service import update_document_metadata
+
+# Import Week 9 state/event services.
+from app.services.document_state_service import get_document_status
+from app.services.document_state_service import update_document_state
+from app.services.document_event_service import get_document_events
+from app.services.document_event_service import log_document_event
 
 # Import PDF extraction service.
 from app.services.pdf_parser_service import extract_text_from_pdf
@@ -93,22 +112,38 @@ router = APIRouter(
 )
 
 
-# Create POST API for uploading a document.
+def utc_now() -> str:
+    """
+    Return current UTC time as ISO string.
+
+    UTC is best for backend timestamps because it avoids timezone confusion.
+    """
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ---------------------------------------------------------
+# POST /documents/upload
+# ---------------------------------------------------------
+
 @router.post("/upload", response_model=DocumentUploadResponse)
 def upload_document(file: UploadFile = File(...)):
     """
     Upload a PDF document.
 
-    Week 8 behavior:
+    Week 9 behavior:
     1. Save PDF locally.
-    2. If S3_UPLOAD_ENABLED=true, also upload the PDF to S3.
-    3. Save metadata to DynamoDB primary + local JSON backup/cache.
-    4. If SQS_ENABLED=true, send document_id to SQS.
-    5. Return quickly with status queued.
+    2. If S3_UPLOAD_ENABLED=true, upload PDF to S3.
+    3. Save metadata as uploaded.
+    4. Log DOCUMENT_UPLOADED event.
+    5. If SQS_ENABLED=true, send document_id to SQS.
+    6. Update metadata as queued.
+    7. Log DOCUMENT_QUEUED event.
+    8. Return quickly.
 
     Important:
     This endpoint does NOT extract, chunk, or index the PDF.
-    A background worker will do extraction, chunking, and indexing later.
+    The background worker does that.
     """
 
     # Check if uploaded filename exists.
@@ -135,11 +170,13 @@ def upload_document(file: UploadFile = File(...)):
     # Generate a unique document ID.
     document_id = generate_document_id()
 
+    # Store upload timestamp.
+    uploaded_at = utc_now()
+
     # Save uploaded PDF locally.
     saved_file_path = save_pdf_locally(file, document_id)
 
     # Create default S3 metadata values.
-    # These defaults are used when S3 is disabled or S3 upload fails.
     s3_bucket = None
     s3_key = None
     s3_uri = None
@@ -166,18 +203,23 @@ def upload_document(file: UploadFile = File(...)):
 
         except S3ServiceError as error:
             # During migration, do not break local upload if S3 fails.
-            # The document is still saved locally.
             s3_upload_status = "failed"
             s3_error_message = str(error)
 
     # Create metadata record for this document.
-    # This record is first saved as uploaded.
-    # Then, if SQS succeeds, we update it to queued.
     document_metadata = {
         "document_id": document_id,
         "filename": file.filename,
         "file_path": str(saved_file_path),
-        "status": "uploaded",
+        "status": DocumentStatus.UPLOADED,
+        "current_step": ProcessingStep.UPLOADED,
+        "progress_percentage": 5,
+        "retry_count": 0,
+        "uploaded_at": uploaded_at,
+        "started_at": None,
+        "completed_at": None,
+        "failed_at": None,
+        "updated_at": uploaded_at,
         "s3_bucket": s3_bucket,
         "s3_key": s3_key,
         "s3_uri": s3_uri,
@@ -192,68 +234,84 @@ def upload_document(file: UploadFile = File(...)):
         "error_message": None,
     }
 
-    # Save initial metadata.
-    # This saves upload information before attempting SQS.
-    # Your metadata_service writes to DynamoDB primary + local documents.json backup/cache.
+    # Save initial metadata to DynamoDB/local cache.
     add_document_metadata(document_metadata)
+
+    # Log upload event.
+    log_document_event(
+        document_id=document_id,
+        event_type=DocumentEventType.DOCUMENT_UPLOADED,
+        message="PDF uploaded successfully.",
+        status=DocumentStatus.UPLOADED,
+        current_step=ProcessingStep.UPLOADED,
+        progress_percentage=5,
+        details={
+            "filename": file.filename,
+            "s3_upload_status": s3_upload_status,
+            "s3_key": s3_key,
+        },
+    )
 
     # If SQS is enabled, send this document as a background processing job.
     if SQS_ENABLED:
         try:
             # Send only document_id to SQS.
-            #
-            # We do NOT send the PDF file to SQS.
-            # The PDF already exists locally and in S3.
-            # Later, the worker will read document_id from SQS
-            # and use that document_id to find the PDF/artifacts.
             sqs_result = send_document_processing_message(
-                document_id=document_id
+                document_id=document_id,
             )
 
-            # Store current UTC time.
-            # UTC is preferred for backend systems because it avoids timezone confusion.
-            queued_at = datetime.now(timezone.utc).isoformat()
+            # Store queued timestamp.
+            queued_at = utc_now()
 
-            # Create fields that should be updated after successful SQS send.
-            queued_update = {
-                "status": "queued",
-                "sqs_message_id": sqs_result.get("message_id"),
-                "sqs_queue_name": sqs_result.get("queue_name"),
-                "sqs_send_status": "success",
-                "queued_at": queued_at,
-                "queue_error": None,
-                "queue_failed_at": None,
-                "error_message": None,
-            }
+            # Get queue name from SQS response or config fallback.
+            sqs_queue_name = sqs_result.get(
+                "queue_name",
+                getattr(config, "SQS_QUEUE_NAME", None),
+            )
 
-            # Update metadata in DynamoDB/local cache.
-            update_document_metadata(document_id, queued_update)
+            # Update document state to queued and log event.
+            updated_document = update_document_state(
+                document_id=document_id,
+                status=DocumentStatus.QUEUED,
+                current_step=ProcessingStep.QUEUED,
+                event_type=DocumentEventType.DOCUMENT_QUEUED,
+                event_message="Document sent to SQS queue successfully.",
+                progress_percentage=10,
+                extra_updates={
+                    "sqs_message_id": sqs_result.get("message_id"),
+                    "sqs_queue_name": sqs_queue_name,
+                    "sqs_send_status": "success",
+                    "queued_at": queued_at,
+                    "queue_error": None,
+                    "queue_failed_at": None,
+                    "error_message": None,
+                },
+            )
 
-            # Also update the local dictionary used for the API response.
-            # Without this, the response may still show old status="uploaded".
-            document_metadata.update(queued_update)
+            # Update local response dictionary.
+            document_metadata.update(updated_document)
 
         except Exception as error:
-            # If SQS sending fails, the uploaded PDF is not lost.
-            # It is already saved locally and maybe uploaded to S3.
-            #
-            # But background processing cannot start because no queue message was created.
-            # So we mark this document as queue_failed.
-            queue_failed_update = {
-                "status": "queue_failed",
-                "sqs_send_status": "failed",
-                "queue_error": str(error),
-                "queue_failed_at": datetime.now(timezone.utc).isoformat(),
-                "error_message": str(error),
-            }
+            # Queue failure timestamp.
+            queue_failed_at = utc_now()
 
-            # Save failed queue status.
-            update_document_metadata(document_id, queue_failed_update)
+            # Update metadata as queue_failed and log failure event.
+            update_document_state(
+                document_id=document_id,
+                status=DocumentStatus.QUEUE_FAILED,
+                current_step="Failed to send document to SQS queue",
+                event_type=DocumentEventType.DOCUMENT_FAILED,
+                event_message="Document upload succeeded but SQS queue send failed.",
+                progress_percentage=100,
+                error_message=str(error),
+                extra_updates={
+                    "sqs_send_status": "failed",
+                    "queue_error": str(error),
+                    "queue_failed_at": queue_failed_at,
+                },
+            )
 
             # Return a clean Swagger error.
-            #
-            # This tells us:
-            # Upload succeeded, but SQS job creation failed.
             raise HTTPException(
                 status_code=500,
                 detail={
@@ -266,19 +324,18 @@ def upload_document(file: UploadFile = File(...)):
             )
 
     # Return clean upload response.
-    #
-    # Because DocumentUploadResponse includes SQS fields,
-    # FastAPI will show them in Swagger response.
     return DocumentUploadResponse(
         document_id=document_id,
         filename=file.filename,
         status=document_metadata["status"],
         message=(
             "PDF uploaded successfully and queued for background processing."
-            if document_metadata["status"] == "queued"
+            if document_metadata["status"] == DocumentStatus.QUEUED
             else "PDF uploaded successfully."
         ),
         file_path=str(saved_file_path),
+        current_step=document_metadata.get("current_step"),
+        progress_percentage=document_metadata.get("progress_percentage"),
         s3_bucket=s3_bucket,
         s3_key=s3_key,
         s3_uri=s3_uri,
@@ -286,17 +343,21 @@ def upload_document(file: UploadFile = File(...)):
         sqs_message_id=document_metadata.get("sqs_message_id"),
         sqs_queue_name=document_metadata.get("sqs_queue_name"),
         sqs_send_status=document_metadata.get("sqs_send_status"),
+        uploaded_at=document_metadata.get("uploaded_at"),
         queued_at=document_metadata.get("queued_at"),
     )
 
 
-# Create GET API to list all uploaded documents.
+# ---------------------------------------------------------
+# GET /documents
+# ---------------------------------------------------------
+
 @router.get("", response_model=DocumentListResponse)
 def list_documents():
     """
     List all uploaded documents from metadata storage.
 
-    Your metadata_service decides the actual source:
+    metadata_service decides actual source:
     DynamoDB primary + local JSON backup/cache.
     """
 
@@ -316,7 +377,71 @@ def list_documents():
     )
 
 
-# Create GET API to fetch one document by ID.
+# ---------------------------------------------------------
+# GET /documents/{document_id}/status
+# ---------------------------------------------------------
+
+@router.get("/{document_id}/status", response_model=DocumentStatusResponse)
+def get_document_processing_status(document_id: str):
+    """
+    Get current processing status of one document.
+
+    This is useful for:
+    queued -> processing -> extracting -> chunking -> indexing -> completed
+    """
+
+    # Load current status from metadata.
+    status_data = get_document_status(document_id)
+
+    # If document does not exist, return 404.
+    if not status_data:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    # Return clean status response.
+    return status_data
+
+
+# ---------------------------------------------------------
+# GET /documents/{document_id}/events
+# ---------------------------------------------------------
+
+@router.get("/{document_id}/events", response_model=DocumentEventsResponse)
+def get_document_processing_events(document_id: str):
+    """
+    Get full event timeline for one document.
+
+    This is useful for debugging and demo:
+    uploaded -> queued -> extraction started -> extraction completed -> etc.
+    """
+
+    # First check if document exists.
+    document = get_document_by_id(document_id)
+
+    # If document does not exist, return 404.
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    # Load events from DynamoDB events table.
+    events = get_document_events(document_id)
+
+    # Return response.
+    return DocumentEventsResponse(
+        document_id=document_id,
+        event_count=len(events),
+        events=events,
+    )
+
+
+# ---------------------------------------------------------
+# GET /documents/{document_id}
+# ---------------------------------------------------------
+
 @router.get("/{document_id}", response_model=DocumentMetadata)
 def get_document(document_id: str):
     """
@@ -337,7 +462,10 @@ def get_document(document_id: str):
     return DocumentMetadata(**document)
 
 
-# Create POST API to extract text from uploaded PDF.
+# ---------------------------------------------------------
+# POST /documents/{document_id}/extract
+# ---------------------------------------------------------
+
 @router.post("/{document_id}/extract", response_model=DocumentExtractionResponse)
 def extract_document(document_id: str):
     """
@@ -359,22 +487,23 @@ def extract_document(document_id: str):
         )
 
     try:
-        # Update status to extracting.
-        update_document_metadata(
-            document_id,
-            {
-                "status": "extracting",
+        # Update state to extracting.
+        update_document_state(
+            document_id=document_id,
+            status=DocumentStatus.EXTRACTING,
+            current_step=ProcessingStep.EXTRACTING,
+            event_type=DocumentEventType.EXTRACTION_STARTED,
+            event_message="Started extracting text from PDF.",
+            progress_percentage=35,
+            extra_updates={
                 "error_message": None,
             },
         )
 
         # Ensure PDF exists locally.
-        # If local PDF is missing, this downloads it from S3.
         pdf_path = ensure_pdf_available_locally(document)
 
         # Extract text from PDF.
-        # We pass pdf_path as a positional argument because
-        # extract_text_from_pdf() does not have a parameter named "pdf_path".
         extraction_result = extract_text_from_pdf(
             pdf_path,
             document_id,
@@ -407,11 +536,15 @@ def extract_document(document_id: str):
                 extracted_text_s3_upload_status = "failed"
                 extracted_text_s3_error_message = str(error)
 
-        # Update metadata after successful extraction.
-        update_document_metadata(
-            document_id,
-            {
-                "status": "extracted",
+        # Update state after successful extraction.
+        update_document_state(
+            document_id=document_id,
+            status=DocumentStatus.EXTRACTED,
+            current_step=ProcessingStep.EXTRACTED,
+            event_type=DocumentEventType.EXTRACTION_COMPLETED,
+            event_message="Text extraction completed successfully.",
+            progress_percentage=50,
+            extra_updates={
                 "page_count": extraction_result["page_count"],
                 "extracted_text_path": extraction_result["extracted_text_path"],
                 "extracted_text_s3_bucket": extracted_text_s3_bucket,
@@ -426,7 +559,7 @@ def extract_document(document_id: str):
         # Return extraction response.
         return DocumentExtractionResponse(
             document_id=document_id,
-            status="extracted",
+            status=DocumentStatus.EXTRACTED,
             page_count=extraction_result["page_count"],
             extracted_text_path=extraction_result["extracted_text_path"],
             message="Text extracted successfully.",
@@ -436,13 +569,15 @@ def extract_document(document_id: str):
         )
 
     except Exception as error:
-        # Update status to failed if extraction fails.
-        update_document_metadata(
-            document_id,
-            {
-                "status": "failed",
-                "error_message": str(error),
-            },
+        # Update state to failed if extraction fails.
+        update_document_state(
+            document_id=document_id,
+            status=DocumentStatus.FAILED,
+            current_step=ProcessingStep.FAILED,
+            event_type=DocumentEventType.DOCUMENT_FAILED,
+            event_message="Text extraction failed.",
+            progress_percentage=100,
+            error_message=str(error),
         )
 
         # Return clean 500 error.
@@ -452,7 +587,10 @@ def extract_document(document_id: str):
         )
 
 
-# Create POST API to create chunks from extracted text.
+# ---------------------------------------------------------
+# POST /documents/{document_id}/chunk
+# ---------------------------------------------------------
+
 @router.post("/{document_id}/chunk", response_model=DocumentChunkingResponse)
 def chunk_document(document_id: str):
     """
@@ -474,7 +612,6 @@ def chunk_document(document_id: str):
         )
 
     # Check if text extraction has already happened.
-    # We allow either local path or S3 key/URI, because local file may be missing.
     if document.get("extracted_text_path") is None and document.get("extracted_text_s3_key") is None:
         raise HTTPException(
             status_code=400,
@@ -482,17 +619,20 @@ def chunk_document(document_id: str):
         )
 
     try:
-        # Update status to chunking.
-        update_document_metadata(
-            document_id,
-            {
-                "status": "chunking",
+        # Update state to chunking.
+        update_document_state(
+            document_id=document_id,
+            status=DocumentStatus.CHUNKING,
+            current_step=ProcessingStep.CHUNKING,
+            event_type=DocumentEventType.CHUNKING_STARTED,
+            event_message="Started creating page-aware chunks.",
+            progress_percentage=60,
+            extra_updates={
                 "error_message": None,
             },
         )
 
         # Ensure extracted_text.json exists locally.
-        # If local extracted_text.json is missing, this downloads it from S3.
         extracted_text_path = ensure_extracted_text_available_locally(document)
 
         # Create chunks from extracted_text.json.
@@ -530,11 +670,15 @@ def chunk_document(document_id: str):
                 chunks_s3_upload_status = "failed"
                 chunks_s3_error_message = str(error)
 
-        # Update metadata after successful chunking.
-        update_document_metadata(
-            document_id,
-            {
-                "status": "chunked",
+        # Update state after successful chunking.
+        update_document_state(
+            document_id=document_id,
+            status=DocumentStatus.CHUNKED,
+            current_step=ProcessingStep.CHUNKED,
+            event_type=DocumentEventType.CHUNKING_COMPLETED,
+            event_message="Chunking completed successfully.",
+            progress_percentage=70,
+            extra_updates={
                 "chunk_count": chunking_result["chunk_count"],
                 "chunks_path": chunking_result["chunks_path"],
                 "chunks_s3_bucket": chunks_s3_bucket,
@@ -549,7 +693,7 @@ def chunk_document(document_id: str):
         # Return clean chunking response.
         return DocumentChunkingResponse(
             document_id=document_id,
-            status="chunked",
+            status=DocumentStatus.CHUNKED,
             chunk_count=chunking_result["chunk_count"],
             chunks_path=chunking_result["chunks_path"],
             message="Document chunked successfully.",
@@ -559,13 +703,15 @@ def chunk_document(document_id: str):
         )
 
     except Exception as error:
-        # Update status to failed if chunking fails.
-        update_document_metadata(
-            document_id,
-            {
-                "status": "failed",
-                "error_message": str(error),
-            },
+        # Update state to failed if chunking fails.
+        update_document_state(
+            document_id=document_id,
+            status=DocumentStatus.FAILED,
+            current_step=ProcessingStep.FAILED,
+            event_type=DocumentEventType.DOCUMENT_FAILED,
+            event_message="Chunking failed.",
+            progress_percentage=100,
+            error_message=str(error),
         )
 
         # Return clean 500 error.
@@ -575,7 +721,10 @@ def chunk_document(document_id: str):
         )
 
 
-# Create GET API to view chunks for a document.
+# ---------------------------------------------------------
+# GET /documents/{document_id}/chunks
+# ---------------------------------------------------------
+
 @router.get("/{document_id}/chunks", response_model=DocumentChunksResponse)
 def get_document_chunks(document_id: str):
     """
@@ -596,7 +745,6 @@ def get_document_chunks(document_id: str):
         )
 
     # Check if chunks are already created.
-    # We allow either local path or S3 key/URI, because local file may be missing.
     if document.get("chunks_path") is None and document.get("chunks_s3_key") is None:
         raise HTTPException(
             status_code=400,
@@ -604,7 +752,6 @@ def get_document_chunks(document_id: str):
         )
 
     # Ensure chunks.json exists locally.
-    # If local chunks.json is missing, this downloads it from S3.
     chunks_path = ensure_chunks_available_locally(document)
 
     # Load chunks from chunks.json.
@@ -624,7 +771,10 @@ def get_document_chunks(document_id: str):
     )
 
 
-# Create POST API to index document chunks into Pinecone.
+# ---------------------------------------------------------
+# POST /documents/{document_id}/index
+# ---------------------------------------------------------
+
 @router.post("/{document_id}/index", response_model=DocumentIndexingResponse)
 def index_document(document_id: str):
     """
@@ -632,7 +782,6 @@ def index_document(document_id: str):
 
     S3 behavior:
     If local chunks.json is missing, recover it from S3.
-    S3 is used as cloud storage backup for PDF/extracted text/chunks.
     """
 
     # Find document metadata using document_id.
@@ -646,7 +795,6 @@ def index_document(document_id: str):
         )
 
     # Check if chunks are created before indexing.
-    # We allow either local path or S3 key/URI, because local file may be missing.
     if document.get("chunks_path") is None and document.get("chunks_s3_key") is None:
         raise HTTPException(
             status_code=400,
@@ -654,17 +802,20 @@ def index_document(document_id: str):
         )
 
     try:
-        # Update document status to indexing.
-        update_document_metadata(
-            document_id,
-            {
-                "status": "indexing",
+        # Update state to indexing.
+        update_document_state(
+            document_id=document_id,
+            status=DocumentStatus.INDEXING,
+            current_step=ProcessingStep.INDEXING,
+            event_type=DocumentEventType.INDEXING_STARTED,
+            event_message="Started indexing chunks into Pinecone.",
+            progress_percentage=85,
+            extra_updates={
                 "error_message": None,
             },
         )
 
         # Ensure chunks.json exists locally.
-        # If local chunks.json is missing, this downloads it from S3.
         chunks_path = ensure_chunks_available_locally(document)
 
         # Load chunks from chunks.json.
@@ -673,32 +824,48 @@ def index_document(document_id: str):
         # Store chunk embeddings in Pinecone.
         indexing_result = index_document_chunks(chunks_data)
 
-        # Update metadata after successful indexing.
-        update_document_metadata(
-            document_id,
-            {
-                "status": "indexed",
+        # Update state after successful indexing.
+        update_document_state(
+            document_id=document_id,
+            status=DocumentStatus.INDEXED,
+            current_step=ProcessingStep.INDEXED,
+            event_type=DocumentEventType.INDEXING_COMPLETED,
+            event_message="Vector indexing completed successfully.",
+            progress_percentage=95,
+            extra_updates={
                 "vector_count": indexing_result["vector_count"],
                 "error_message": None,
             },
         )
 
+        # Also mark document as completed.
+        update_document_state(
+            document_id=document_id,
+            status=DocumentStatus.COMPLETED,
+            current_step=ProcessingStep.COMPLETED,
+            event_type=DocumentEventType.DOCUMENT_COMPLETED,
+            event_message="Document processing completed successfully.",
+            progress_percentage=100,
+        )
+
         # Return clean response.
         return DocumentIndexingResponse(
             document_id=document_id,
-            status="indexed",
+            status=DocumentStatus.COMPLETED,
             vector_count=indexing_result["vector_count"],
             message="Document chunks indexed successfully.",
         )
 
     except Exception as error:
-        # Update status to failed if indexing fails.
-        update_document_metadata(
-            document_id,
-            {
-                "status": "failed",
-                "error_message": str(error),
-            },
+        # Update state to failed if indexing fails.
+        update_document_state(
+            document_id=document_id,
+            status=DocumentStatus.FAILED,
+            current_step=ProcessingStep.FAILED,
+            event_type=DocumentEventType.DOCUMENT_FAILED,
+            event_message="Indexing failed.",
+            progress_percentage=100,
+            error_message=str(error),
         )
 
         # Return clean error.

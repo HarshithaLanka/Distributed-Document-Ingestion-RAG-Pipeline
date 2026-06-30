@@ -1,5 +1,42 @@
+# app/services/sqs_service.py
+
+"""
+This file contains all AWS SQS helper functions.
+
+SQS simple meaning:
+SQS is a queue. The upload API puts a small job message into the queue.
+The worker reads that job message later and processes the document.
+
+Important:
+The SQS message should contain document_id.
+
+Example message body:
+{
+    "job_id": "...",
+    "job_type": "process_document",
+    "document_id": "doc_123",
+    "pipeline_steps": ["extract", "chunk", "index"],
+    "created_at": "..."
+}
+
+Important Week 9 fix:
+receive_document_processing_messages() now returns BOTH formats:
+
+1. AWS-style keys used by worker:
+   - Body
+   - ReceiptHandle
+   - MessageId
+
+2. Clean keys useful for debugging/tests:
+   - body
+   - receipt_handle
+   - message_id
+
+This prevents the worker from reading empty Body = {}.
+"""
+
 # Import json because SQS message body must be a string.
-# We will convert Python dictionary -> JSON string before sending.
+# We convert Python dictionary -> JSON string before sending.
 import json
 
 # Import uuid to create a unique job_id for every queue message.
@@ -50,7 +87,8 @@ def get_sqs_client():
     """
 
     # Create SQS client in your selected region.
-    # boto3 automatically uses AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY from .env/environment.
+    # boto3 automatically uses AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+    # from environment variables loaded by your app/config setup.
     return boto3.client("sqs", region_name=SQS_REGION)
 
 
@@ -128,7 +166,7 @@ def send_document_processing_message(
     Send document processing job to SQS.
 
     Simple meaning:
-    FastAPI upload API will later call this function after upload.
+    FastAPI upload API calls this function after upload.
     """
 
     # Validate document_id.
@@ -144,7 +182,7 @@ def send_document_processing_message(
         pipeline_steps=pipeline_steps,
     )
 
-    # Convert dictionary to JSON string because SQS Body must be text.
+    # Convert dictionary to JSON string because SQS MessageBody must be text.
     message_body_json = json.dumps(message_body)
 
     try:
@@ -159,9 +197,10 @@ def send_document_processing_message(
 
         # Log successful send.
         logger.info(
-            "SQS message sent. document_id=%s message_id=%s",
+            "SQS message sent. document_id=%s message_id=%s body=%s",
             document_id,
             response.get("MessageId"),
+            message_body,
         )
 
         # Return useful details.
@@ -189,11 +228,19 @@ def receive_document_processing_messages(
     Receive messages from SQS.
 
     Simple meaning:
-    Worker will later call this to get document processing jobs.
+    Worker calls this to get document processing jobs.
 
     Important:
     Receiving a message does NOT delete it.
     We must delete it only after processing succeeds.
+
+    Week 9 important fix:
+    The worker expects AWS-style keys:
+    - Body
+    - ReceiptHandle
+
+    So this function now returns those keys.
+    It also includes lowercase helper keys for debugging.
     """
 
     # Check SQS config.
@@ -234,45 +281,50 @@ def receive_document_processing_messages(
         # If queue is empty, "Messages" key may not exist.
         raw_messages = response.get("Messages", [])
 
-        # Store cleaned parsed messages here.
-        parsed_messages = []
+        # Store cleaned compatible messages here.
+        compatible_messages = []
 
         # Loop through messages.
         for raw_message in raw_messages:
-            # Get message body as text.
+            # Get raw body string exactly as AWS returned it.
             raw_body = raw_message.get("Body", "{}")
 
-            # Convert JSON text to Python dictionary.
+            # Convert JSON text to Python dictionary for debugging/helper use.
             try:
-                body = json.loads(raw_body)
+                parsed_body = json.loads(raw_body)
             except json.JSONDecodeError:
-                body = {
+                parsed_body = {
                     "raw_body": raw_body,
                     "parse_error": "Message body is not valid JSON.",
                 }
 
-            # Add cleaned message info.
-            parsed_messages.append(
-                {
-                    # SQS message ID.
-                    "message_id": raw_message.get("MessageId"),
+            # Build one message dictionary that supports both:
+            # 1. Worker AWS-style keys: Body, ReceiptHandle, MessageId
+            # 2. Debug-friendly keys: body, receipt_handle, message_id
+            compatible_message = {
+                # AWS-style keys expected by workers/document_worker.py
+                "MessageId": raw_message.get("MessageId"),
+                "ReceiptHandle": raw_message.get("ReceiptHandle"),
+                "Body": raw_body,
+                "Attributes": raw_message.get("Attributes", {}),
+                "MessageAttributes": raw_message.get("MessageAttributes", {}),
 
-                    # Receipt handle is required to delete message later.
-                    "receipt_handle": raw_message.get("ReceiptHandle"),
+                # Lowercase helper keys for debugging/tests.
+                "message_id": raw_message.get("MessageId"),
+                "receipt_handle": raw_message.get("ReceiptHandle"),
+                "body": parsed_body,
+                "attributes": raw_message.get("Attributes", {}),
+                "message_attributes": raw_message.get("MessageAttributes", {}),
+            }
 
-                    # Actual message body.
-                    "body": body,
-
-                    # SQS attributes like receive count.
-                    "attributes": raw_message.get("Attributes", {}),
-                }
-            )
+            # Add to list.
+            compatible_messages.append(compatible_message)
 
         # Log count.
-        logger.info("Received %s SQS message(s).", len(parsed_messages))
+        logger.info("Received %s SQS message(s).", len(compatible_messages))
 
-        # Return cleaned messages.
-        return parsed_messages
+        # Return compatible messages.
+        return compatible_messages
 
     except (BotoCoreError, ClientError) as error:
         # Log receive error.
