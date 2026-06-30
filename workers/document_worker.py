@@ -91,7 +91,9 @@ from app.services.artifact_resolver_service import (
 )
 
 # Import PDF extraction service.
-from app.services.pdf_parser_service import extract_text_from_pdf
+# Import parser abstraction service.
+# This uses Docling if enabled and falls back to PyMuPDF if Docling fails.
+from app.services.parser_service import parse_document
 
 # Import chunking services.
 from app.services.chunking_service import create_chunks_from_extracted_text
@@ -405,9 +407,12 @@ def process_document(document_id: str) -> None:
 
     # Extract text from PDF.
     # Your existing route uses this same positional argument order.
-    extraction_result = extract_text_from_pdf(
-        pdf_path,
-        document_id,
+    # Parse document using Week 10 parser abstraction.
+# This tries Docling first if DOCLING_ENABLED=true.
+# If Docling fails, parser_service falls back to PyMuPDF.
+    extraction_result = parse_document(
+    pdf_path=str(pdf_path),
+    document_id=document_id,
     )
 
     # Upload extracted_text.json to S3 if enabled.
@@ -425,11 +430,12 @@ def process_document(document_id: str) -> None:
         event_message="Text extraction completed successfully.",
         progress_percentage=50,
         extra_updates={
-            "page_count": extraction_result["page_count"],
-            "extracted_text_path": extraction_result["extracted_text_path"],
-            **extracted_s3_updates,
-            "error_message": None,
-        },
+    "page_count": extraction_result["page_count"],
+    "extracted_text_path": extraction_result["extracted_text_path"],
+    "parser_used": extraction_result.get("parser_used", "unknown"),
+    **extracted_s3_updates,
+    "error_message": None,
+},
     )
 
     # ---------------------------------------------------------
@@ -475,11 +481,12 @@ def process_document(document_id: str) -> None:
         event_message="Chunking completed successfully.",
         progress_percentage=70,
         extra_updates={
-            "chunk_count": chunking_result["chunk_count"],
-            "chunks_path": chunking_result["chunks_path"],
-            **chunks_s3_updates,
-            "error_message": None,
-        },
+    "chunk_count": chunking_result["chunk_count"],
+    "chunks_path": chunking_result["chunks_path"],
+    "parser_used": chunking_result.get("parser_used", "unknown"),
+    **chunks_s3_updates,
+    "error_message": None,
+},
     )
 
     # ---------------------------------------------------------
@@ -517,9 +524,10 @@ def process_document(document_id: str) -> None:
         event_message="Vector indexing completed successfully.",
         progress_percentage=95,
         extra_updates={
-            "vector_count": indexing_result["vector_count"],
-            "error_message": None,
-        },
+    "vector_count": indexing_result["vector_count"],
+    "parser_used": indexing_result.get("parser_used", "unknown"),
+    "error_message": None,
+},
     )
 
     # Mark full document completed.

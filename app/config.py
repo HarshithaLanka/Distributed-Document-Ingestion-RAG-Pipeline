@@ -384,3 +384,42 @@ def get_missing_dynamodb_events_settings() -> list[str]:
         missing.append("DYNAMODB_EVENTS_TABLE_NAME")
 
     return missing
+
+
+# =========================
+# WEEK 10 PARSER CONFIGURATION
+# =========================
+
+# DOCLING_ENABLED controls whether the app should try Docling first.
+# true  = try Docling before PyMuPDF
+# false = use only PyMuPDF
+DOCLING_ENABLED = os.getenv("DOCLING_ENABLED", "false").lower() == "true"
+
+
+# PRIMARY_PARSER tells the project which parser is preferred.
+# For Week 10, valid values are:
+# - "docling"
+# - "pymupdf"
+PRIMARY_PARSER = os.getenv("PRIMARY_PARSER", "pymupdf").lower()
+
+
+# PARSER_FALLBACK_ENABLED controls whether PyMuPDF should run if Docling fails.
+# Keep this true because Docling is new in our project.
+PARSER_FALLBACK_ENABLED = os.getenv("PARSER_FALLBACK_ENABLED", "true").lower() == "true"
+
+
+# =========================
+# HUGGING FACE CACHE SETTINGS FOR DOCLING
+# =========================
+
+# On Windows, Hugging Face may try to create symlinks while downloading Docling models.
+# Normal PowerShell may not have permission to create symlinks.
+# This disables symlink usage and avoids WinError 1314.
+HF_HUB_DISABLE_SYMLINKS = os.getenv("HF_HUB_DISABLE_SYMLINKS", "1")
+
+# This hides the symlink warning after we intentionally disable symlinks.
+HF_HUB_DISABLE_SYMLINKS_WARNING = os.getenv("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
+# Apply these values to the current Python process.
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS", HF_HUB_DISABLE_SYMLINKS)
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", HF_HUB_DISABLE_SYMLINKS_WARNING)
