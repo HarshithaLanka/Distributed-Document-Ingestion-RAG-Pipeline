@@ -1,7 +1,7 @@
 # workers/document_worker.py
 
 """
-Week 9 worker.
+Week 11 worker.
 
 What this worker does:
 1. Keeps running continuously.
@@ -12,18 +12,18 @@ What this worker does:
 6. Deletes SQS message only after success.
 7. Deletes invalid old/test SQS messages that do not contain document_id.
 8. Stops safely when you press CTRL+C.
+9. Uses Docling/PyMuPDF parser abstraction from Week 10.
+10. Creates redacted_chunks.json before Pinecone indexing.
+11. Sends redacted chunks to Pinecone, not raw chunks.
 
 Run:
     python workers/document_worker.py
 
 Important:
-This worker uses your existing project functions:
-- ensure_pdf_available_locally()
-- ensure_extracted_text_available_locally()
-- ensure_chunks_available_locally()
-- create_chunks_from_extracted_text()
-- load_chunks()
-- index_document_chunks()
+Indexing to Pinecone means:
+- generate embeddings for chunk text
+- send vector values plus metadata to Pinecone
+- Pinecone stores them for future search
 """
 
 # Import json to parse SQS message body.
@@ -90,14 +90,18 @@ from app.services.artifact_resolver_service import (
     ensure_chunks_available_locally,
 )
 
-# Import PDF extraction service.
 # Import parser abstraction service.
 # This uses Docling if enabled and falls back to PyMuPDF if Docling fails.
 from app.services.parser_service import parse_document
 
-# Import chunking services.
+# Import chunking service.
 from app.services.chunking_service import create_chunks_from_extracted_text
-from app.services.chunking_service import load_chunks
+
+# Import PII redaction services.
+# create_redacted_chunks_file creates redacted_chunks.json from chunks.json.
+# load_redacted_chunks loads that safe redacted file before Pinecone indexing.
+from app.services.pii_redaction_service import create_redacted_chunks_file
+from app.services.pii_redaction_service import load_redacted_chunks
 
 # Import Pinecone indexing service.
 from app.services.pinecone_service import index_document_chunks
@@ -105,6 +109,7 @@ from app.services.pinecone_service import index_document_chunks
 # Import S3 artifact upload services.
 from app.services.s3_service import upload_extracted_text_to_s3
 from app.services.s3_service import upload_chunks_to_s3
+from app.services.s3_service import upload_redacted_chunks_to_s3
 from app.services.s3_service import S3ServiceError
 
 # Import logger.
@@ -219,7 +224,7 @@ def should_skip_document(document: dict | None) -> bool:
     we should not process it again.
 
     Example:
-    If status is completed/indexed, skip extraction/chunking/indexing.
+    If status is completed/indexed, skip extraction/chunking/redaction/indexing.
     """
 
     # If document metadata does not exist, do not skip.
@@ -291,7 +296,7 @@ def upload_chunks_artifact_if_enabled(
     Upload chunks.json to S3 if S3 is enabled.
 
     If S3 upload fails, we do not stop the worker.
-    Pinecone indexing can still continue using local chunks.json.
+    Redaction can still continue using local chunks.json.
     """
 
     # Default values when S3 is disabled.
@@ -329,6 +334,55 @@ def upload_chunks_artifact_if_enabled(
     return result
 
 
+def upload_redacted_chunks_artifact_if_enabled(
+    document_id: str,
+    redacted_chunks_path: str,
+) -> dict:
+    """
+    Upload redacted_chunks.json to S3 if S3 is enabled.
+
+    Actual meaning:
+    This stores the privacy-safe chunks artifact in S3.
+
+    If S3 upload fails, we do not stop the worker.
+    Pinecone indexing can still continue using local redacted_chunks.json.
+    """
+
+    # Default values when S3 is disabled.
+    result = {
+        "redacted_chunks_s3_bucket": None,
+        "redacted_chunks_s3_key": None,
+        "redacted_chunks_s3_uri": None,
+        "redacted_chunks_s3_upload_status": "disabled",
+        "redacted_chunks_s3_error_message": None,
+    }
+
+    # If S3 upload is disabled, return default values.
+    if not S3_UPLOAD_ENABLED:
+        return result
+
+    try:
+        # Upload redacted_chunks.json to S3.
+        s3_result = upload_redacted_chunks_to_s3(
+            local_file_path=redacted_chunks_path,
+            document_id=document_id,
+        )
+
+        # Store success fields.
+        result["redacted_chunks_s3_bucket"] = s3_result["bucket"]
+        result["redacted_chunks_s3_key"] = s3_result["s3_key"]
+        result["redacted_chunks_s3_uri"] = s3_result["s3_uri"]
+        result["redacted_chunks_s3_upload_status"] = "success"
+
+    except S3ServiceError as error:
+        # Store error but do not crash worker.
+        result["redacted_chunks_s3_upload_status"] = "failed"
+        result["redacted_chunks_s3_error_message"] = str(error)
+
+    # Return result fields.
+    return result
+
+
 # ---------------------------------------------------------
 # Main document processing function
 # ---------------------------------------------------------
@@ -344,6 +398,8 @@ def process_document(document_id: str) -> None:
     -> extracted
     -> chunking
     -> chunked
+    -> redacting
+    -> redacted
     -> indexing
     -> indexed
     -> completed
@@ -367,7 +423,7 @@ def process_document(document_id: str) -> None:
             progress_percentage=100,
         )
 
-        # Return without doing extraction/chunking/indexing again.
+        # Return without doing extraction/chunking/redaction/indexing again.
         return
 
     # Mark document as processing.
@@ -392,7 +448,7 @@ def process_document(document_id: str) -> None:
     pdf_path = ensure_pdf_available_locally(document)
 
     # ---------------------------------------------------------
-    # Step 2: Extract text.
+    # Step 2: Extract/parse text.
     # ---------------------------------------------------------
 
     # Mark extraction started.
@@ -405,14 +461,12 @@ def process_document(document_id: str) -> None:
         progress_percentage=35,
     )
 
-    # Extract text from PDF.
-    # Your existing route uses this same positional argument order.
     # Parse document using Week 10 parser abstraction.
-# This tries Docling first if DOCLING_ENABLED=true.
-# If Docling fails, parser_service falls back to PyMuPDF.
+    # This tries Docling first if DOCLING_ENABLED=true.
+    # If Docling fails, parser_service falls back to PyMuPDF.
     extraction_result = parse_document(
-    pdf_path=str(pdf_path),
-    document_id=document_id,
+        pdf_path=str(pdf_path),
+        document_id=document_id,
     )
 
     # Upload extracted_text.json to S3 if enabled.
@@ -430,12 +484,12 @@ def process_document(document_id: str) -> None:
         event_message="Text extraction completed successfully.",
         progress_percentage=50,
         extra_updates={
-    "page_count": extraction_result["page_count"],
-    "extracted_text_path": extraction_result["extracted_text_path"],
-    "parser_used": extraction_result.get("parser_used", "unknown"),
-    **extracted_s3_updates,
-    "error_message": None,
-},
+            "page_count": extraction_result["page_count"],
+            "extracted_text_path": extraction_result["extracted_text_path"],
+            "parser_used": extraction_result.get("parser_used", "unknown"),
+            **extracted_s3_updates,
+            "error_message": None,
+        },
     )
 
     # ---------------------------------------------------------
@@ -481,16 +535,16 @@ def process_document(document_id: str) -> None:
         event_message="Chunking completed successfully.",
         progress_percentage=70,
         extra_updates={
-    "chunk_count": chunking_result["chunk_count"],
-    "chunks_path": chunking_result["chunks_path"],
-    "parser_used": chunking_result.get("parser_used", "unknown"),
-    **chunks_s3_updates,
-    "error_message": None,
-},
+            "chunk_count": chunking_result["chunk_count"],
+            "chunks_path": chunking_result["chunks_path"],
+            "parser_used": chunking_result.get("parser_used", "unknown"),
+            **chunks_s3_updates,
+            "error_message": None,
+        },
     )
 
     # ---------------------------------------------------------
-    # Step 4: Index chunks into Pinecone.
+    # Step 4: Redact PII from chunks.
     # ---------------------------------------------------------
 
     # Reload latest metadata after chunking.
@@ -499,8 +553,55 @@ def process_document(document_id: str) -> None:
     # Ensure chunks.json exists locally.
     chunks_path = ensure_chunks_available_locally(document_id)
 
-    # Load chunks from chunks.json.
-    chunks_data = load_chunks(chunks_path)
+    # Mark PII redaction started.
+    update_document_state(
+        document_id=document_id,
+        status=DocumentStatus.REDACTING,
+        current_step=ProcessingStep.REDACTING,
+        event_type=DocumentEventType.PII_REDACTION_STARTED,
+        event_message="Started redacting sensitive information from chunks.",
+        progress_percentage=75,
+    )
+
+    # Create redacted_chunks.json from chunks.json.
+    # Actual meaning:
+    # This reads original chunks and replaces emails/phones/SSNs with placeholders.
+    redaction_result = create_redacted_chunks_file(chunks_path)
+
+    # Upload redacted_chunks.json to S3 if enabled.
+    redacted_chunks_s3_updates = upload_redacted_chunks_artifact_if_enabled(
+        document_id=document_id,
+        redacted_chunks_path=redaction_result["redacted_chunks_path"],
+    )
+
+    # Mark PII redaction completed.
+    update_document_state(
+        document_id=document_id,
+        status=DocumentStatus.REDACTED,
+        current_step=ProcessingStep.REDACTED,
+        event_type=DocumentEventType.PII_REDACTION_COMPLETED,
+        event_message="PII redaction completed successfully.",
+        progress_percentage=80,
+        extra_updates={
+            "redacted_chunks_path": redaction_result["redacted_chunks_path"],
+            "redaction_applied": redaction_result["redaction_applied"],
+            "redaction_count": redaction_result["redaction_count"],
+            "redaction_types": redaction_result["redaction_types"],
+            **redacted_chunks_s3_updates,
+            "error_message": None,
+        },
+    )
+
+    # ---------------------------------------------------------
+    # Step 5: Index redacted chunks into Pinecone.
+    # ---------------------------------------------------------
+
+    # Load redacted_chunks.json.
+    # Important:
+    # Pinecone receives redacted chunks, not raw chunks.
+    redacted_chunks_data = load_redacted_chunks(
+        redaction_result["redacted_chunks_path"]
+    )
 
     # Mark indexing started.
     update_document_state(
@@ -508,12 +609,15 @@ def process_document(document_id: str) -> None:
         status=DocumentStatus.INDEXING,
         current_step=ProcessingStep.INDEXING,
         event_type=DocumentEventType.INDEXING_STARTED,
-        event_message="Started indexing chunks into Pinecone.",
+        event_message="Started indexing redacted chunks into Pinecone.",
         progress_percentage=85,
     )
 
-    # Store chunk embeddings in Pinecone.
-    indexing_result = index_document_chunks(chunks_data)
+    # Store redacted chunk embeddings in Pinecone.
+    # Actual meaning:
+    # The embedding model sees redacted text.
+    # Pinecone source_text also becomes redacted text.
+    indexing_result = index_document_chunks(redacted_chunks_data)
 
     # Mark indexing completed.
     update_document_state(
@@ -521,13 +625,14 @@ def process_document(document_id: str) -> None:
         status=DocumentStatus.INDEXED,
         current_step=ProcessingStep.INDEXED,
         event_type=DocumentEventType.INDEXING_COMPLETED,
-        event_message="Vector indexing completed successfully.",
+        event_message="Redacted chunk vector indexing completed successfully.",
         progress_percentage=95,
         extra_updates={
-    "vector_count": indexing_result["vector_count"],
-    "parser_used": indexing_result.get("parser_used", "unknown"),
-    "error_message": None,
-},
+            "vector_count": indexing_result["vector_count"],
+            "parser_used": indexing_result.get("parser_used", "unknown"),
+            "privacy_processed": True,
+            "error_message": None,
+        },
     )
 
     # Mark full document completed.

@@ -6,6 +6,11 @@ This file keeps all document statuses and event names in one place.
 Why this file is useful:
 - We avoid typing random strings like "indexed", "Indexing", "completed" in many files.
 - If status names are centralized, the worker, routes, tests, and metadata all stay consistent.
+
+Week 11 update:
+- Added REDACTING and REDACTED statuses.
+- Added PII redaction processing steps.
+- Added PII redaction event types.
 """
 
 
@@ -31,6 +36,12 @@ class DocumentStatus:
 
     # Chunking finished.
     CHUNKED = "chunked"
+
+    # Worker is redacting sensitive information from chunks.
+    REDACTING = "redacting"
+
+    # PII redaction finished.
+    REDACTED = "redacted"
 
     # Worker is creating embeddings and saving vectors to Pinecone.
     INDEXING = "indexing"
@@ -77,6 +88,11 @@ class ProcessingStep:
     EXTRACTED = "Text extraction completed"
     CHUNKING = "Creating page-aware chunks"
     CHUNKED = "Chunking completed"
+
+    # Week 11 redaction steps.
+    REDACTING = "Redacting sensitive information"
+    REDACTED = "PII redaction completed"
+
     INDEXING = "Indexing chunks into Pinecone"
     INDEXED = "Vector indexing completed"
     COMPLETED = "Document processing completed"
@@ -97,6 +113,10 @@ class DocumentEventType:
     CHUNKING_STARTED = "CHUNKING_STARTED"
     CHUNKING_COMPLETED = "CHUNKING_COMPLETED"
 
+    # Week 11 PII redaction events.
+    PII_REDACTION_STARTED = "PII_REDACTION_STARTED"
+    PII_REDACTION_COMPLETED = "PII_REDACTION_COMPLETED"
+
     INDEXING_STARTED = "INDEXING_STARTED"
     INDEXING_COMPLETED = "INDEXING_COMPLETED"
 
@@ -116,6 +136,11 @@ STATUS_PROGRESS = {
     DocumentStatus.EXTRACTED: 50,
     DocumentStatus.CHUNKING: 60,
     DocumentStatus.CHUNKED: 70,
+
+    # Week 11 redaction progress.
+    DocumentStatus.REDACTING: 75,
+    DocumentStatus.REDACTED: 80,
+
     DocumentStatus.INDEXING: 85,
     DocumentStatus.INDEXED: 95,
     DocumentStatus.COMPLETED: 100,

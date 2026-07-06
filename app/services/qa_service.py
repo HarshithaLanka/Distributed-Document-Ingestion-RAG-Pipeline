@@ -1,7 +1,9 @@
+# app/services/qa_service.py
+
 # Import re so we can detect question patterns safely using regular expressions.
 import re
 
-# Import json so we can read chunks.json from local storage.
+# Import json so we can read chunks.json or redacted_chunks.json from local storage.
 import json
 
 # Import Path so we can safely build file paths on Windows, Mac, or Linux.
@@ -34,6 +36,9 @@ from app.services.llm_service import generate_answer_from_ollama
 # Import JSON parser for LLM response.
 from app.services.llm_service import parse_llm_json_response
 
+# Import PII redaction so QA never returns raw emails/phones/SSNs.
+from app.services.pii_redaction_service import redact_text
+
 
 # This finds the root folder of your project.
 # Example:
@@ -47,6 +52,23 @@ NOT_FOUND_ANSWER = "I could not find this information in the document."
 
 # These are the only answer statuses we allow in the final API response.
 ALLOWED_ANSWER_STATUSES = ["found", "partial", "not_found"]
+
+
+# This helper safely redacts any text before sending it to the LLM or user.
+def get_redacted_text(text: str) -> str:
+    """
+    Redact sensitive values from text.
+
+    Actual meaning:
+    Even if raw text accidentally comes from Pinecone or chunks.json,
+    this function hides emails, phone numbers, and SSN-like values.
+    """
+
+    # Redact the text using Week 11 redaction service.
+    result = redact_text(text or "")
+
+    # Return only the safe redacted text.
+    return result["redacted_text"]
 
 
 # These patterns usually mean the user wants a summary.
@@ -237,6 +259,13 @@ STOPWORDS = {
 
 # This function decides what type of question the user asked.
 def detect_question_type(question: str) -> str:
+    """
+    Detect whether the question is:
+    - direct_factual
+    - summary
+    - evidence_based_judgment
+    """
+
     # Convert the question to lowercase so pattern matching is easier.
     lower_question = question.lower().strip()
 
@@ -413,8 +442,11 @@ def build_retrieval_query(question: str, question_type: str) -> str:
 
 # This function creates a short preview for citations.
 def create_source_preview(text: str, max_chars: int = 220) -> str:
+    # First redact sensitive information.
+    safe_text = get_redacted_text(text)
+
     # Replace line breaks and extra spaces with single spaces.
-    cleaned_text = " ".join(text.split())
+    cleaned_text = " ".join(safe_text.split())
 
     # If the text is already short, return it fully.
     if len(cleaned_text) <= max_chars:
@@ -452,6 +484,9 @@ def normalize_pinecone_matches(matches: List[Any]) -> List[Dict[str, Any]]:
         if not source_text.strip():
             continue
 
+        # Redact source text before it enters QA flow.
+        safe_source_text = get_redacted_text(source_text)
+
         # Create one cleaned chunk dictionary.
         cleaned_chunk = {
             # Store chunk ID.
@@ -463,8 +498,8 @@ def normalize_pinecone_matches(matches: List[Any]) -> List[Dict[str, Any]]:
             # Store word count.
             "word_count": int(metadata.get("word_count", 0)),
 
-            # Store original source text.
-            "source_text": source_text,
+            # Store safe redacted source text.
+            "source_text": safe_source_text,
 
             # Store Pinecone similarity score.
             "score": float(score),
@@ -478,24 +513,53 @@ def normalize_pinecone_matches(matches: List[Any]) -> List[Dict[str, Any]]:
 
 
 # This function filters chunks using a minimum score.
-def filter_chunks_by_score(chunks: List[Dict[str, Any]], min_score: float) -> List[Dict[str, Any]]:
+def filter_chunks_by_score(
+    chunks: List[Dict[str, Any]],
+    min_score: float,
+) -> List[Dict[str, Any]]:
     # Keep only chunks whose score is greater than or equal to min_score.
     return [chunk for chunk in chunks if chunk["score"] >= min_score]
 
 
-# This function loads chunks from uploads/{document_id}/chunks.json.
-# We need this because some answers are on important pages that Pinecone may not retrieve.
+# This function loads chunks from local storage.
+# Week 11 important change:
+# Prefer redacted_chunks.json first.
+# If only chunks.json exists, redact text in memory before using it.
 def load_local_chunks(document_id: str) -> List[Dict[str, Any]]:
-    # Build the path to the chunks file for this document.
-    chunks_path = PROJECT_ROOT / "uploads" / document_id / "chunks.json"
+    """
+    Load local chunks safely.
 
-    # If chunks.json does not exist, return an empty list safely.
-    if not chunks_path.exists():
+    Actual meaning:
+    QA fallback should not read raw chunks.json directly if redacted_chunks.json exists.
+
+    Priority:
+    1. uploads/{document_id}/redacted_chunks.json
+    2. uploads/{document_id}/chunks.json with in-memory redaction
+    """
+
+    # Build document upload folder path.
+    document_folder = PROJECT_ROOT / "uploads" / document_id
+
+    # Build path to redacted chunks.
+    redacted_chunks_path = document_folder / "redacted_chunks.json"
+
+    # Build path to original chunks.
+    chunks_path = document_folder / "chunks.json"
+
+    # Prefer redacted_chunks.json.
+    if redacted_chunks_path.exists():
+        selected_path = redacted_chunks_path
+
+    # If redacted file does not exist, use chunks.json.
+    elif chunks_path.exists():
+        selected_path = chunks_path
+
+    # If neither file exists, return empty list.
+    else:
         return []
 
-    # Open chunks.json using UTF-8 because PDF text may contain special characters.
-    with open(chunks_path, "r", encoding="utf-8") as file:
-        # Load the JSON data from the file.
+    # Open selected chunks file.
+    with open(selected_path, "r", encoding="utf-8") as file:
         chunks_data = json.load(file)
 
     # Some projects save chunks.json as a list.
@@ -510,24 +574,27 @@ def load_local_chunks(document_id: str) -> List[Dict[str, Any]]:
     # Create an empty list to store normalized chunks.
     normalized_chunks = []
 
-    # Loop through every chunk stored in chunks.json.
+    # Loop through every chunk.
     for chunk in chunks_data:
         # Skip invalid chunk objects.
         if not isinstance(chunk, dict):
             continue
 
-        # Get the chunk text safely.
+        # Get chunk text safely.
         source_text = chunk.get("text", "")
 
         # Some formats may store the text as source_text.
         if not source_text:
             source_text = chunk.get("source_text", "")
 
-        # Skip empty chunks because they cannot help answer.
+        # Skip empty chunks.
         if not source_text.strip():
             continue
 
-        # Convert local chunk format into the same format used by Pinecone chunks.
+        # Always redact again as final safety.
+        safe_source_text = get_redacted_text(source_text)
+
+        # Convert local chunk format into Pinecone-like format.
         normalized_chunk = {
             # Store chunk ID.
             "chunk_id": chunk.get("chunk_id", ""),
@@ -538,18 +605,18 @@ def load_local_chunks(document_id: str) -> List[Dict[str, Any]]:
             # Store word count.
             "word_count": int(chunk.get("word_count", 0)),
 
-            # Store chunk text.
-            "source_text": source_text,
+            # Store safe chunk text.
+            "source_text": safe_source_text,
 
             # Use 1.0 because local anchor chunks are intentionally selected.
             # This is not a Pinecone similarity score.
             "score": 1.0,
         }
 
-        # Add this chunk to the normalized list.
+        # Add this chunk.
         normalized_chunks.append(normalized_chunk)
 
-    # Return all local chunks.
+    # Return all safe local chunks.
     return normalized_chunks
 
 
@@ -587,7 +654,10 @@ def is_table_of_contents_chunk(text: str) -> bool:
 
 
 # This function gives priority points to chunks that are useful for document summaries.
-def calculate_summary_anchor_score(chunk: Dict[str, Any], max_page_number: int) -> int:
+def calculate_summary_anchor_score(
+    chunk: Dict[str, Any],
+    max_page_number: int,
+) -> int:
     # Start with zero points.
     score = 0
 
@@ -646,8 +716,11 @@ def calculate_summary_anchor_score(chunk: Dict[str, Any], max_page_number: int) 
 
 
 # This function selects important chunks for summary questions.
-def get_summary_anchor_chunks(document_id: str, max_anchor_chunks: int = 3) -> List[Dict[str, Any]]:
-    # Load all chunks from local chunks.json.
+def get_summary_anchor_chunks(
+    document_id: str,
+    max_anchor_chunks: int = 3,
+) -> List[Dict[str, Any]]:
+    # Load all safe local chunks.
     local_chunks = load_local_chunks(document_id)
 
     # If no local chunks are available, return empty list.
@@ -687,8 +760,11 @@ def get_summary_anchor_chunks(document_id: str, max_anchor_chunks: int = 3) -> L
 
 # This function selects first-page/header chunks for identity questions.
 # Names and team members are usually present in title page, cover page, or certificate page.
-def get_identity_anchor_chunks(document_id: str, max_anchor_chunks: int = 3) -> List[Dict[str, Any]]:
-    # Load all chunks from local chunks.json.
+def get_identity_anchor_chunks(
+    document_id: str,
+    max_anchor_chunks: int = 3,
+) -> List[Dict[str, Any]]:
+    # Load all safe local chunks.
     local_chunks = load_local_chunks(document_id)
 
     # If no local chunks are available, return empty list.
@@ -724,8 +800,11 @@ def get_identity_anchor_chunks(document_id: str, max_anchor_chunks: int = 3) -> 
 
 # This function selects chunks that are likely to contain skills, technologies,
 # programming languages, tools, frameworks, or databases.
-def get_skill_technology_anchor_chunks(document_id: str, max_anchor_chunks: int = 3) -> List[Dict[str, Any]]:
-    # Load all chunks from local chunks.json.
+def get_skill_technology_anchor_chunks(
+    document_id: str,
+    max_anchor_chunks: int = 3,
+) -> List[Dict[str, Any]]:
+    # Load all safe local chunks.
     local_chunks = load_local_chunks(document_id)
 
     # If no local chunks are available, return empty list.
@@ -803,7 +882,7 @@ def get_keyword_overlap_chunks(
     question: str,
     max_keyword_chunks: int = 3,
 ) -> List[Dict[str, Any]]:
-    # Load chunks from local chunks.json.
+    # Load safe chunks from local storage.
     local_chunks = load_local_chunks(document_id)
 
     # If no local chunks exist, return empty list.
@@ -939,9 +1018,12 @@ def build_context_text(chunks: List[Dict[str, Any]]) -> str:
 
     # Loop through each retrieved chunk.
     for chunk in chunks:
+        # Redact again before sending context to Ollama.
+        safe_source_text = get_redacted_text(chunk["source_text"])
+
         # Shorten the chunk text before sending it to Ollama.
         limited_source_text = limit_chunk_text(
-            text=chunk["source_text"],
+            text=safe_source_text,
             max_chars=1200,
         )
 
@@ -987,6 +1069,7 @@ Very important rules:
 15. Use only chunk IDs that directly support the answer.
 16. If the answer is not clearly supported by the context, return answer_status as "not_found".
 17. Return valid JSON only. Do not return markdown.
+18. If the context contains placeholders such as [EMAIL_REDACTED], [PHONE_REDACTED], or [SSN_REDACTED], use the placeholder exactly. Do not try to reconstruct the original sensitive value.
 
 Question type:
 {question_type}
@@ -1123,7 +1206,11 @@ def create_not_found_response(question_type: str) -> QAResponse:
 
 
 # This function chooses the min_score based on question type and question wording.
-def get_effective_min_score(question_type: str, requested_min_score: float, question: str) -> float:
+def get_effective_min_score(
+    question_type: str,
+    requested_min_score: float,
+    question: str,
+) -> float:
     # If direct factual question asks identity/name/team-related info,
     # allow lower threshold because names often appear in headers or first pages.
     if question_type == "direct_factual" and is_identity_or_people_question(question):
@@ -1186,7 +1273,7 @@ def answer_question(request: QARequest) -> QAResponse:
         top_k=request.top_k,
     )
 
-    # Convert Pinecone matches into clean dictionaries.
+    # Convert Pinecone matches into clean safe dictionaries.
     chunks = normalize_pinecone_matches(pinecone_matches)
 
     # Choose min_score based on question type.
@@ -1202,7 +1289,7 @@ def answer_question(request: QARequest) -> QAResponse:
         min_score=effective_min_score,
     )
 
-    # For summary questions, add important document-level chunks from local chunks.json.
+    # For summary questions, add important document-level chunks from local storage.
     if question_type == "summary":
         # Get important summary anchor chunks from local storage.
         summary_anchor_chunks = get_summary_anchor_chunks(
@@ -1268,6 +1355,7 @@ def answer_question(request: QARequest) -> QAResponse:
         return create_not_found_response(question_type)
 
     # Build context text from filtered chunks.
+    # This context is redacted before going to Ollama.
     context_text = build_context_text(filtered_chunks)
 
     # Build the final RAG prompt.
@@ -1286,6 +1374,9 @@ def answer_question(request: QARequest) -> QAResponse:
     # Get the answer from the parsed LLM JSON.
     answer = llm_data.get("answer", NOT_FOUND_ANSWER).strip()
 
+    # Redact final answer immediately.
+    safe_answer = get_redacted_text(answer)
+
     # Get chunk IDs that the LLM says it used.
     used_chunk_ids = llm_data.get("used_chunk_ids", [])
 
@@ -1299,7 +1390,7 @@ def answer_question(request: QARequest) -> QAResponse:
         return create_not_found_response(question_type)
 
     # If the answer text itself looks like not-found, return clean not-found response.
-    if is_not_found_answer(answer):
+    if is_not_found_answer(safe_answer):
         return create_not_found_response(question_type)
 
     # If the model did not provide used chunk IDs, do not trust the answer.
@@ -1311,6 +1402,7 @@ def answer_question(request: QARequest) -> QAResponse:
         return create_not_found_response(question_type)
 
     # Build clean citations only from chunks used by the model.
+    # Citation previews are redacted inside create_source_preview().
     citations = build_citations(
         chunks=filtered_chunks,
         used_chunk_ids=used_chunk_ids,
@@ -1321,9 +1413,9 @@ def answer_question(request: QARequest) -> QAResponse:
     if not citations:
         return create_not_found_response(question_type)
 
-    # Return final answer with citations.
+    # Return final safe answer with citations.
     return QAResponse(
-        answer=answer,
+        answer=safe_answer,
         citations=citations,
         answer_status=answer_status,
         question_type=question_type,

@@ -23,7 +23,35 @@ from app.config import (
     get_missing_s3_settings,
 )
 
+def upload_redacted_chunks_to_s3(
+    local_file_path: str,
+    document_id: str,
+) -> dict:
+    """
+    Upload redacted_chunks.json to S3.
 
+    Actual meaning:
+    This stores the privacy-safe chunk artifact in S3.
+
+    Original chunks.json:
+        May contain raw emails/phones.
+
+    redacted_chunks.json:
+        Contains [EMAIL_REDACTED], [PHONE_REDACTED], etc.
+    """
+
+    # Build S3 key for redacted_chunks.json.
+    s3_key = build_document_artifact_s3_key(
+        document_id=document_id,
+        artifact_filename="redacted_chunks.json",
+    )
+
+    # Upload local JSON file to S3.
+    return upload_local_file_to_s3(
+        local_file_path=local_file_path,
+        s3_key=s3_key,
+        content_type="application/json",
+    )
 # Create a custom exception for S3-related service errors.
 class S3ServiceError(Exception):
     """
