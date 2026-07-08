@@ -20,15 +20,31 @@ from fastapi import status
 from fastapi.encoders import jsonable_encoder
 
 # Import document router.
+# This connects APIs like:
+# POST /documents/upload
+# GET /documents
+# GET /documents/{document_id}
+# GET /documents/{document_id}/status
+# GET /documents/{document_id}/events
 from app.routes.document_routes import router as document_router
 
 # Import search router.
+# This connects vector search APIs like:
+# POST /search/vector
 from app.routes.search_routes import router as search_router
 
 # Import QA router.
+# This connects RAG Q&A APIs like:
+# POST /qa/ask
 from app.routes.qa_routes import router as qa_router
 
+# Import entity router.
+# This connects Week 12 Neo4j entity API:
+# GET /documents/{document_id}/entities
+from app.routes.entity_routes import router as entity_router
+
 # Import our custom application exception class.
+# This is used for clean project-specific errors.
 from app.utils.exceptions import AppException
 
 # Import logger helper.
@@ -41,14 +57,19 @@ logger = get_logger(__name__)
 
 
 # Create FastAPI app.
+# This is the main backend application object.
 app = FastAPI(
     title="Production-Grade Document Intelligence and RAG Pipeline",
-    description="Backend for PDF upload, extraction, chunking, indexing, vector search, and RAG Q&A.",
-    version="1.0.0"
+    description=(
+        "Backend for PDF upload, extraction, chunking, PII redaction, "
+        "indexing, vector search, Neo4j entity graph, and RAG Q&A."
+    ),
+    version="1.0.0",
 )
 
 
 # Health check API.
+# This is used to confirm the backend server is running.
 @app.get("/health")
 def health_check():
     # Log whenever health check is called.
@@ -57,12 +78,13 @@ def health_check():
     # Return simple success response.
     return {
         "status": "ok",
-        "message": "Document Intelligence API is running."
+        "message": "Document Intelligence API is running.",
     }
 
 
 # Handle our custom app errors.
-# Example: raise NotFoundException("Document not found")
+# Example:
+# raise NotFoundException("Document not found")
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException):
     # Log custom application errors.
@@ -79,14 +101,15 @@ async def app_exception_handler(request: Request, exc: AppException):
             "error": {
                 "code": exc.error_code,
                 "message": exc.message,
-                "path": request.url.path
-            }
-        }
+                "path": request.url.path,
+            },
+        },
     )
 
 
 # Handle normal FastAPI HTTP errors.
-# Example: raise HTTPException(status_code=404, detail="Document not found")
+# Example:
+# raise HTTPException(status_code=404, detail="Document not found")
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     # Log HTTP errors.
@@ -103,14 +126,15 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             "error": {
                 "code": "HTTP_ERROR",
                 "message": exc.detail,
-                "path": request.url.path
-            }
-        }
+                "path": request.url.path,
+            },
+        },
     )
 
 
 # Handle request validation errors.
-# Example: user calls /qa without document_id.
+# Example:
+# User calls /qa/ask without document_id.
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     # Log validation errors.
@@ -127,9 +151,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
                 "code": "VALIDATION_ERROR",
                 "message": "Request validation failed",
                 "path": request.url.path,
-                "details": jsonable_encoder(exc.errors())
-            }
-        }
+                "details": jsonable_encoder(exc.errors()),
+            },
+        },
     )
 
 
@@ -141,7 +165,7 @@ async def general_exception_handler(request: Request, exc: Exception):
     # exc_info=True shows the full traceback in terminal.
     logger.error(
         f"Unexpected server error | path={request.url.path} | error={str(exc)}",
-        exc_info=True
+        exc_info=True,
     )
 
     # Return safe 500 response.
@@ -153,19 +177,35 @@ async def general_exception_handler(request: Request, exc: Exception):
             "error": {
                 "code": "INTERNAL_SERVER_ERROR",
                 "message": "Something went wrong inside the server",
-                "path": request.url.path
-            }
-        }
+                "path": request.url.path,
+            },
+        },
     )
 
 
 # Connect document APIs.
+# Examples:
+# POST /documents/upload
+# GET /documents
+# GET /documents/{document_id}
+# GET /documents/{document_id}/status
+# GET /documents/{document_id}/events
 app.include_router(document_router)
 
 
 # Connect search APIs.
+# Example:
+# POST /search/vector
 app.include_router(search_router)
 
 
 # Connect Q&A APIs.
+# Example:
+# POST /qa/ask
 app.include_router(qa_router)
+
+
+# Connect Week 12 entity graph APIs.
+# Example:
+# GET /documents/{document_id}/entities
+app.include_router(entity_router)

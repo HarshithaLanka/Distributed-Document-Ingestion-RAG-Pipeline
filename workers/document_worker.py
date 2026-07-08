@@ -1,7 +1,7 @@
 # workers/document_worker.py
 
 """
-Week 11 worker.
+Week 12 worker.
 
 What this worker does:
 1. Keeps running continuously.
@@ -15,15 +15,22 @@ What this worker does:
 9. Uses Docling/PyMuPDF parser abstraction from Week 10.
 10. Creates redacted_chunks.json before Pinecone indexing.
 11. Sends redacted chunks to Pinecone, not raw chunks.
+12. Week 12: Extracts entities from redacted chunks and stores graph data in Neo4j.
 
 Run:
     python workers/document_worker.py
 
-Important:
+Important meanings:
+
 Indexing to Pinecone means:
 - generate embeddings for chunk text
 - send vector values plus metadata to Pinecone
-- Pinecone stores them for future search
+- Pinecone stores them for semantic search
+
+Graph storage to Neo4j means:
+- extract entities from redacted chunks
+- create Document, Chunk, and Entity nodes
+- create relationships like HAS_CHUNK, MENTIONS, and APPEARS_IN
 """
 
 # Import json to parse SQS message body.
@@ -102,6 +109,12 @@ from app.services.chunking_service import create_chunks_from_extracted_text
 # load_redacted_chunks loads that safe redacted file before Pinecone indexing.
 from app.services.pii_redaction_service import create_redacted_chunks_file
 from app.services.pii_redaction_service import load_redacted_chunks
+
+# Import Week 12 graph pipeline service.
+# This extracts entities from redacted chunks and writes graph data to Neo4j.
+from app.services.graph_pipeline_service import (
+    build_graph_for_document_from_redacted_chunks,
+)
 
 # Import Pinecone indexing service.
 from app.services.pinecone_service import index_document_chunks
@@ -236,6 +249,29 @@ def should_skip_document(document: dict | None) -> bool:
 
     # Skip if status is already indexed/completed.
     return status in TERMINAL_SUCCESS_STATUSES
+
+
+def get_document_filename(document: dict | None) -> str:
+    """
+    Safely get filename from document metadata.
+
+    Why:
+    Different weeks/files may store filename using slightly different keys.
+    This helper prevents worker failure because of one missing filename key.
+    """
+
+    # If document is missing, return empty string.
+    if not document:
+        return ""
+
+    # Try common filename keys.
+    return (
+        document.get("filename")
+        or document.get("original_filename")
+        or document.get("file_name")
+        or document.get("s3_filename")
+        or ""
+    )
 
 
 # ---------------------------------------------------------
@@ -400,9 +436,14 @@ def process_document(document_id: str) -> None:
     -> chunked
     -> redacting
     -> redacted
+    -> graph pipeline
     -> indexing
     -> indexed
     -> completed
+
+    Important:
+    Graph pipeline uses redacted_chunks.json.
+    This means Neo4j should not store raw email/phone/SSN values.
     """
 
     # Load current document metadata.
@@ -593,7 +634,87 @@ def process_document(document_id: str) -> None:
     )
 
     # ---------------------------------------------------------
-    # Step 5: Index redacted chunks into Pinecone.
+    # Step 5: Week 12 graph pipeline using Neo4j.
+    # ---------------------------------------------------------
+
+    # Default graph metadata values.
+    # These are stored later in document metadata after completion.
+    graph_processed = False
+    graph_written = False
+    graph_unique_entities_count = 0
+    graph_entity_mentions_count = 0
+    graph_error_message = None
+
+    try:
+        # Reload latest metadata after redaction.
+        document = get_document_by_id(document_id)
+
+        # Get filename safely.
+        filename = get_document_filename(document)
+
+        # Get parser used.
+        # Prefer chunking_result parser_used because chunks are produced from parsed output.
+        parser_used = (
+            chunking_result.get("parser_used")
+            or extraction_result.get("parser_used")
+            or "unknown"
+        )
+
+        # Log graph pipeline start.
+        logger.info(
+            "Starting Week 12 graph pipeline. document_id=%s redacted_chunks_path=%s",
+            document_id,
+            redaction_result["redacted_chunks_path"],
+        )
+
+        # Build Neo4j graph from redacted chunks.
+        # Important:
+        # This uses redacted_chunks.json, not raw chunks.json.
+        graph_summary = build_graph_for_document_from_redacted_chunks(
+            document_id=document_id,
+            redacted_chunks_path=redaction_result["redacted_chunks_path"],
+            filename=filename,
+            parser_used=parser_used,
+        )
+
+        # Read useful graph summary values.
+        graph_processed = True
+        graph_written = bool(graph_summary.get("graph_written", False))
+        graph_unique_entities_count = int(
+            graph_summary.get("unique_entities_stored", 0) or 0
+        )
+        graph_entity_mentions_count = int(
+            graph_summary.get("entity_mentions_extracted", 0) or 0
+        )
+
+        # Log graph pipeline success.
+        logger.info(
+            "Week 12 graph pipeline completed. document_id=%s graph_written=%s "
+            "entity_mentions=%s unique_entities=%s",
+            document_id,
+            graph_written,
+            graph_entity_mentions_count,
+            graph_unique_entities_count,
+        )
+
+    except Exception as graph_error:
+        # Important production decision:
+        # Graph failure should not break normal RAG processing.
+        # Pinecone indexing and Q&A should still work even if Neo4j is temporarily down.
+        graph_processed = False
+        graph_written = False
+        graph_error_message = str(graph_error)
+
+        # Log graph pipeline failure with full traceback.
+        logger.error(
+            "Week 12 graph pipeline failed. document_id=%s error=%s",
+            document_id,
+            graph_error_message,
+            exc_info=True,
+        )
+
+    # ---------------------------------------------------------
+    # Step 6: Index redacted chunks into Pinecone.
     # ---------------------------------------------------------
 
     # Load redacted_chunks.json.
@@ -631,6 +752,11 @@ def process_document(document_id: str) -> None:
             "vector_count": indexing_result["vector_count"],
             "parser_used": indexing_result.get("parser_used", "unknown"),
             "privacy_processed": True,
+            "graph_processed": graph_processed,
+            "graph_written": graph_written,
+            "graph_unique_entities_count": graph_unique_entities_count,
+            "graph_entity_mentions_count": graph_entity_mentions_count,
+            "graph_error_message": graph_error_message,
             "error_message": None,
         },
     )
@@ -643,6 +769,13 @@ def process_document(document_id: str) -> None:
         event_type=DocumentEventType.DOCUMENT_COMPLETED,
         event_message="Document processing completed successfully.",
         progress_percentage=100,
+        extra_updates={
+            "graph_processed": graph_processed,
+            "graph_written": graph_written,
+            "graph_unique_entities_count": graph_unique_entities_count,
+            "graph_entity_mentions_count": graph_entity_mentions_count,
+            "graph_error_message": graph_error_message,
+        },
     )
 
 
