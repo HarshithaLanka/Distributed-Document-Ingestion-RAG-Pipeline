@@ -24,11 +24,14 @@ from app.models.qa_models import QARequest, QAResponse
 # Import Citation model.
 from app.models.qa_models import Citation
 
-# Import embedding function so we can convert text into a vector.
-from app.services.embedding_service import generate_embedding
+# Import Week 14 hybrid retrieval.
+# This combines Pinecone vector search, BM25 keyword search,
+# and optional Neo4j graph retrieval.
+from app.services.hybrid_retrieval_service import hybrid_search_document
 
-# Import Pinecone search function.
-from app.services.pinecone_service import search_vectors
+# Import Week 14 reranking service.
+# Reranking selects the strongest final chunks before they are sent to Ollama.
+from app.services.reranking_service import rerank_candidates
 
 # Import Ollama answer generation function.
 from app.services.llm_service import generate_answer_from_ollama
@@ -510,6 +513,97 @@ def normalize_pinecone_matches(matches: List[Any]) -> List[Dict[str, Any]]:
 
     # Return all cleaned chunks.
     return cleaned_chunks
+
+
+
+# This function converts Week 14 hybrid/reranked results into the
+# same safe chunk format already used by this QA service.
+def normalize_retrieval_candidates(
+    candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Convert hybrid and reranked candidates into QA chunks.
+
+    Expected candidate fields may include:
+    - text
+    - source_text
+    - chunk_id
+    - page_number
+    - section_title
+    - content_type
+    - hybrid_score
+    - rerank_score
+    - retrieval_sources
+    """
+
+    # Store final normalized chunks.
+    normalized_chunks: List[Dict[str, Any]] = []
+
+    # Loop through each candidate.
+    for candidate in candidates:
+        # Skip invalid candidate objects.
+        if not isinstance(candidate, dict):
+            continue
+
+        # Read chunk ID.
+        chunk_id = candidate.get("chunk_id")
+
+        # Read text from possible fields.
+        source_text = (
+            candidate.get("text")
+            or candidate.get("source_text")
+            or candidate.get("source_preview")
+            or ""
+        )
+
+        # Skip candidates without useful identity or text.
+        if not chunk_id or not str(source_text).strip():
+            continue
+
+        # Read page number safely.
+        try:
+            page_number = int(candidate.get("page_number") or 0)
+        except (TypeError, ValueError):
+            page_number = 0
+
+        # Prefer rerank score, then hybrid score, then generic score.
+        raw_score = candidate.get(
+            "rerank_score",
+            candidate.get(
+                "hybrid_score",
+                candidate.get("score", 0.0),
+            ),
+        )
+
+        # Convert score safely.
+        try:
+            score = float(raw_score)
+        except (TypeError, ValueError):
+            score = 0.0
+
+        # Redact text before it enters the QA flow.
+        safe_source_text = get_redacted_text(str(source_text))
+
+        # Add normalized chunk.
+        normalized_chunks.append(
+            {
+                "chunk_id": str(chunk_id),
+                "page_number": page_number,
+                "word_count": int(candidate.get("word_count") or 0),
+                "section_title": candidate.get("section_title") or "",
+                "content_type": candidate.get("content_type") or "",
+                "source_text": safe_source_text,
+                "score": score,
+                "hybrid_score": float(candidate.get("hybrid_score") or 0.0),
+                "rerank_score": float(candidate.get("rerank_score") or score),
+                "retrieval_sources": list(
+                    candidate.get("retrieval_sources") or []
+                ),
+            }
+        )
+
+    # Return safe normalized chunks.
+    return normalized_chunks
 
 
 # This function filters chunks using a minimum score.
@@ -1254,166 +1348,212 @@ def normalize_answer_status(answer_status: str) -> str:
 
 # This is the main service function used by the /qa route.
 def answer_question(request: QARequest) -> QAResponse:
-    # Detect the type of user question.
+    """
+    Answer one question using the Week 14 retrieval pipeline.
+
+    New Week 14 flow:
+    1. Detect question type.
+    2. Build a retrieval query.
+    3. Retrieve candidates using vector + BM25 + graph search.
+    4. Rerank the candidates.
+    5. Keep only the strongest final chunks.
+    6. Send those chunks to Ollama.
+    7. Validate citations against retrieved chunks only.
+    """
+
+    # Detect whether this is factual, summary, or judgment.
     question_type = detect_question_type(request.question)
 
-    # Build a better retrieval query.
+    # Build the retrieval version of the question.
+    # The original user question is still used for answer generation.
     retrieval_query = build_retrieval_query(
         question=request.question,
         question_type=question_type,
     )
 
-    # Convert the retrieval query into an embedding vector.
-    question_embedding = generate_embedding(retrieval_query)
+    # Retrieve more candidates than we finally send to Ollama.
+    # This improves recall before reranking.
+    requested_top_k = max(int(request.top_k), 1)
+    candidate_top_k = min(max(requested_top_k * 3, 10), 20)
 
-    # Search Pinecone for similar chunks inside this document.
-    pinecone_matches = search_vectors(
-        query_embedding=question_embedding,
+    # Run Week 14 hybrid retrieval:
+    # Pinecone vector + BM25 keyword + Neo4j graph retrieval.
+    hybrid_candidates = hybrid_search_document(
         document_id=request.document_id,
-        top_k=request.top_k,
+        query=retrieval_query,
+        top_k=candidate_top_k,
+        vector_top_k=min(candidate_top_k, 20),
+        keyword_top_k=min(candidate_top_k, 20),
+        graph_top_k=min(candidate_top_k, 10),
+        vector_weight=0.5,
+        keyword_weight=0.3,
+        graph_weight=0.2,
+        include_graph=True,
     )
 
-    # Convert Pinecone matches into clean safe dictionaries.
-    chunks = normalize_pinecone_matches(pinecone_matches)
+    # Decide how many chunks the LLM should finally receive.
+    # More context is not always better, so keep this small.
+    final_top_k = min(max(requested_top_k, 4), 5)
 
-    # Choose min_score based on question type.
+    # Rerank all retrieved candidates using:
+    # hybrid score + keyword overlap + phrase overlap
+    # + entity overlap + section-title overlap.
+    reranked_candidates = rerank_candidates(
+        question=request.question,
+        candidates=hybrid_candidates,
+        final_top_k=final_top_k,
+    )
+
+    # Convert reranked results into the existing QA chunk format.
+    filtered_chunks = normalize_retrieval_candidates(
+        reranked_candidates
+    )
+
+    # Apply minimum relevance threshold after reranking.
     effective_min_score = get_effective_min_score(
         question_type=question_type,
         requested_min_score=request.min_score,
         question=request.question,
     )
 
-    # Filter Pinecone chunks using the effective min_score.
     filtered_chunks = filter_chunks_by_score(
-        chunks=chunks,
+        chunks=filtered_chunks,
         min_score=effective_min_score,
     )
 
-    # For summary questions, add important document-level chunks from local storage.
+    # Keep your older local anchor logic as a fallback enhancement.
+    # This is especially useful for title pages, summaries, and skill sections.
+
     if question_type == "summary":
-        # Get important summary anchor chunks from local storage.
         summary_anchor_chunks = get_summary_anchor_chunks(
             document_id=request.document_id,
-            max_anchor_chunks=3,
+            max_anchor_chunks=2,
         )
 
-        # Merge summary anchor chunks first, then Pinecone chunks.
         filtered_chunks = merge_and_deduplicate_chunks(
-            first_chunks=summary_anchor_chunks,
-            second_chunks=filtered_chunks,
+            first_chunks=filtered_chunks,
+            second_chunks=summary_anchor_chunks,
             max_total_chunks=5,
         )
 
-    # For direct factual people/name/team questions, add first-page/header chunks.
-    if question_type == "direct_factual" and is_identity_or_people_question(request.question):
-        # Get cover/header chunks from local storage.
+    if (
+        question_type == "direct_factual"
+        and is_identity_or_people_question(request.question)
+    ):
         identity_anchor_chunks = get_identity_anchor_chunks(
             document_id=request.document_id,
-            max_anchor_chunks=3,
+            max_anchor_chunks=2,
         )
 
-        # Merge identity anchor chunks first, then Pinecone chunks.
         filtered_chunks = merge_and_deduplicate_chunks(
-            first_chunks=identity_anchor_chunks,
-            second_chunks=filtered_chunks,
+            first_chunks=filtered_chunks,
+            second_chunks=identity_anchor_chunks,
             max_total_chunks=5,
         )
 
-    # For direct factual skill/technology questions, add skills/technology chunks.
-    if question_type == "direct_factual" and is_skill_or_technology_question(request.question):
-        # Get skills/technology chunks from local storage.
-        skill_technology_anchor_chunks = get_skill_technology_anchor_chunks(
+    if (
+        question_type == "direct_factual"
+        and is_skill_or_technology_question(request.question)
+    ):
+        skill_anchor_chunks = get_skill_technology_anchor_chunks(
             document_id=request.document_id,
-            max_anchor_chunks=3,
+            max_anchor_chunks=2,
         )
 
-        # Merge skill/technology chunks first, then Pinecone chunks.
         filtered_chunks = merge_and_deduplicate_chunks(
-            first_chunks=skill_technology_anchor_chunks,
-            second_chunks=filtered_chunks,
+            first_chunks=filtered_chunks,
+            second_chunks=skill_anchor_chunks,
             max_total_chunks=5,
         )
 
-    # Generic lexical fallback.
-    # This helps exact names and references like:
-    # FixMyMill, YOLOv8, TastyThreads, Week 6, Chapter 3, Section 2.1, invoice numbers, policy names.
+    # Keep your exact local lexical fallback for structured references
+    # like Week 14, Chapter 3, Section 2.1, product names, and codes.
     keyword_overlap_chunks = get_keyword_overlap_chunks(
         document_id=request.document_id,
         question=request.question,
-        max_keyword_chunks=3,
+        max_keyword_chunks=2,
     )
 
-    # Merge keyword chunks first, then existing filtered chunks.
     filtered_chunks = merge_and_deduplicate_chunks(
-        first_chunks=keyword_overlap_chunks,
-        second_chunks=filtered_chunks,
+        first_chunks=filtered_chunks,
+        second_chunks=keyword_overlap_chunks,
         max_total_chunks=5,
     )
 
-    # If no chunks are available after filtering/anchor/keyword merge, return not found.
+    # If retrieval produced no safe evidence, return not found.
     if not filtered_chunks:
         return create_not_found_response(question_type)
 
-    # Build context text from filtered chunks.
-    # This context is redacted before going to Ollama.
+    # Build redacted context for Ollama.
     context_text = build_context_text(filtered_chunks)
 
-    # Build the final RAG prompt.
+    # Build the document-grounded prompt.
     prompt = build_rag_prompt(
         question=request.question,
         context_text=context_text,
         question_type=question_type,
     )
 
-    # Send the prompt to Ollama.
+    # Generate answer using Ollama.
     raw_llm_response = generate_answer_from_ollama(prompt)
 
-    # Parse the LLM response as JSON.
+    # Parse JSON response.
     llm_data = parse_llm_json_response(raw_llm_response)
 
-    # Get the answer from the parsed LLM JSON.
-    answer = llm_data.get("answer", NOT_FOUND_ANSWER).strip()
-
-    # Redact final answer immediately.
+    # Read and redact answer.
+    answer = str(
+        llm_data.get("answer", NOT_FOUND_ANSWER)
+    ).strip()
     safe_answer = get_redacted_text(answer)
 
-    # Get chunk IDs that the LLM says it used.
+    # Read chunk IDs the model claims to have used.
     used_chunk_ids = llm_data.get("used_chunk_ids", [])
 
-    # Get answer status from the LLM and normalize it.
+    # Reject invalid used_chunk_ids format.
+    if not isinstance(used_chunk_ids, list):
+        used_chunk_ids = []
+
+    # Normalize chunk IDs to strings.
+    used_chunk_ids = [
+        str(chunk_id)
+        for chunk_id in used_chunk_ids
+        if chunk_id
+    ]
+
+    # Validate answer status.
     answer_status = normalize_answer_status(
         llm_data.get("answer_status", "not_found")
     )
 
-    # If the model says not found, return clean not-found response.
+    # Safe not-found checks.
     if answer_status == "not_found":
         return create_not_found_response(question_type)
 
-    # If the answer text itself looks like not-found, return clean not-found response.
     if is_not_found_answer(safe_answer):
         return create_not_found_response(question_type)
 
-    # If the model did not provide used chunk IDs, do not trust the answer.
     if not used_chunk_ids:
         return create_not_found_response(question_type)
 
-    # For direct factual questions, do not allow partial answers.
-    if question_type == "direct_factual" and answer_status == "partial":
+    # Direct factual answers must be fully supported.
+    if (
+        question_type == "direct_factual"
+        and answer_status == "partial"
+    ):
         return create_not_found_response(question_type)
 
-    # Build clean citations only from chunks used by the model.
-    # Citation previews are redacted inside create_source_preview().
+    # Build citations only from the final retrieved context.
     citations = build_citations(
         chunks=filtered_chunks,
         used_chunk_ids=used_chunk_ids,
         question_type=question_type,
     )
 
-    # If no valid citations remain, return not found because answer has no evidence.
+    # No valid citation means no trusted answer.
     if not citations:
         return create_not_found_response(question_type)
 
-    # Return final safe answer with citations.
+    # Return final safe answer.
     return QAResponse(
         answer=safe_answer,
         citations=citations,

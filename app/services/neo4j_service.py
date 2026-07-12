@@ -613,6 +613,140 @@ def get_entities_for_document(document_id: str) -> List[Dict[str, Any]]:
         return entities
 
 
+
+def search_chunks_by_entities(
+    document_id: str,
+    entities: List[str],
+    top_k: int = 5,
+) -> List[Dict[str, Any]]:
+    """
+    Search Neo4j for chunks connected to entities from the user's question.
+
+    Week 14 purpose:
+    - Accept entities extracted from the user question.
+    - Find matching Entity nodes.
+    - Return Chunk nodes connected through MENTIONS.
+    - Restrict results to the selected document_id.
+    - Calculate graph_score from matched entities.
+
+    Example:
+    Query entities:
+    ["neo4j", "bm25"]
+
+    If one chunk mentions both entities:
+    graph_score = 2 / 2 = 1.0
+
+    If another chunk mentions only one:
+    graph_score = 1 / 2 = 0.5
+    """
+
+    # document_id is required so graph results never leak across documents.
+    if not document_id:
+        raise ValueError("document_id is required")
+
+    # Invalid top_k means no results.
+    if top_k <= 0:
+        return []
+
+    # Normalize entity names.
+    normalized_entities = sorted(
+        {
+            str(entity).strip().lower()
+            for entity in entities
+            if str(entity).strip()
+        }
+    )
+
+    # No entities means graph retrieval cannot help.
+    if not normalized_entities:
+        return []
+
+    # If Neo4j is disabled, skip graph retrieval safely.
+    if not is_neo4j_enabled():
+        return []
+
+    # Keep top_k inside a safe limit.
+    safe_top_k = min(top_k, 20)
+
+    # Get driver and database.
+    driver = get_neo4j_driver()
+    database = get_neo4j_database()
+
+    # Open Neo4j session.
+    with driver.session(database=database) as session:
+        # Search only inside the selected document.
+        result = session.run(
+            """
+            MATCH (d:Document {document_id: $document_id})
+                  -[:HAS_CHUNK]->(c:Chunk)
+                  -[:MENTIONS]->(e:Entity)
+            WHERE toLower(e.normalized_text) IN $entities
+            WITH
+                c,
+                collect(DISTINCT e.normalized_text) AS matched_entities
+            RETURN
+                c.document_id AS document_id,
+                c.chunk_id AS chunk_id,
+                c.page_number AS page_number,
+                c.section_title AS section_title,
+                c.content_type AS content_type,
+                c.word_count AS word_count,
+                c.source_preview AS text,
+                matched_entities,
+                size(matched_entities) AS graph_match_count
+            ORDER BY
+                graph_match_count DESC,
+                c.page_number ASC
+            LIMIT $top_k
+            """,
+            document_id=document_id,
+            entities=normalized_entities,
+            top_k=safe_top_k,
+        )
+
+        # Number of unique entities from the question.
+        total_query_entities = len(normalized_entities)
+
+        # Final graph results.
+        graph_results: List[Dict[str, Any]] = []
+
+        # Convert Neo4j records into normal dictionaries.
+        for record in result:
+            # Read number of matched entities.
+            graph_match_count = int(
+                record["graph_match_count"] or 0
+            )
+
+            # Calculate score between 0 and 1.
+            graph_score = (
+                graph_match_count / total_query_entities
+                if total_query_entities > 0
+                else 0.0
+            )
+
+            # Add one graph candidate.
+            graph_results.append(
+                {
+                    "document_id": record["document_id"] or document_id,
+                    "chunk_id": record["chunk_id"],
+                    "page_number": record["page_number"],
+                    "section_title": record["section_title"] or "",
+                    "content_type": record["content_type"] or "",
+                    "word_count": record["word_count"] or 0,
+                    "text": record["text"] or "",
+                    "matched_entities": record["matched_entities"] or [],
+                    "graph_match_count": graph_match_count,
+                    "graph_score": min(
+                        max(float(graph_score), 0.0),
+                        1.0,
+                    ),
+                }
+            )
+
+        # Return graph candidates.
+        return graph_results
+
+
 def delete_document_graph(document_id: str) -> None:
     """
     Delete graph data for one document.

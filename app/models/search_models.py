@@ -1,16 +1,10 @@
 # This file defines request and response models for search APIs.
 
-# Import BaseModel from Pydantic.
-from pydantic import BaseModel
-
-# Import Field from Pydantic.
-from pydantic import Field
+# Import BaseModel and Field from Pydantic.
+from pydantic import BaseModel, Field
 
 # Import Optional because some metadata fields may be missing.
-from typing import Optional
-
-# Import List because responses return lists.
-from typing import List
+from typing import List, Optional
 
 
 # This model defines the request body for vector search.
@@ -121,7 +115,7 @@ class KeywordSearchResponse(BaseModel):
     results: List[KeywordSearchResult]
 
 
-# This model defines the request body for hybrid search.
+# This model defines the request body for Week 14 hybrid search.
 class HybridSearchRequest(BaseModel):
     # Document ID to search inside.
     document_id: str
@@ -133,15 +127,19 @@ class HybridSearchRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20)
 
     # Weight for vector search.
-    # 0.6 means vector search contributes 60% to final score.
-    vector_weight: float = Field(default=0.6, ge=0.0, le=1.0)
+    vector_weight: float = Field(default=0.5, ge=0.0, le=1.0)
 
     # Weight for keyword search.
-    # 0.4 means BM25 contributes 40% to final score.
-    keyword_weight: float = Field(default=0.4, ge=0.0, le=1.0)
+    keyword_weight: float = Field(default=0.3, ge=0.0, le=1.0)
+
+    # Weight for Neo4j graph retrieval.
+    graph_weight: float = Field(default=0.2, ge=0.0, le=1.0)
+
+    # Whether graph retrieval should be included.
+    include_graph: bool = True
 
 
-# This model represents one hybrid search result.
+# This model represents one Week 14 hybrid search result.
 class HybridSearchResult(BaseModel):
     # Document ID.
     document_id: str
@@ -168,16 +166,25 @@ class HybridSearchResult(BaseModel):
     word_count: Optional[int] = None
 
     # Normalized vector score from Pinecone.
-    vector_score: float
+    vector_score: float = 0.0
 
     # Normalized keyword score from BM25.
-    keyword_score: float
+    keyword_score: float = 0.0
 
-    # Final combined score.
-    hybrid_score: float
+    # Graph relevance score from Neo4j.
+    graph_score: float = 0.0
 
-    # Shows whether result came from vector, keyword, or both.
-    matched_by: str
+    # Final combined retrieval score.
+    hybrid_score: float = 0.0
+
+    # Backward-compatible Week 13 field.
+    matched_by: str = "multiple"
+
+    # Shows every retriever that returned this chunk.
+    retrieval_sources: List[str] = Field(default_factory=list)
+
+    # Entities from the question that matched this chunk in Neo4j.
+    matched_entities: List[str] = Field(default_factory=list)
 
 
 # This model defines hybrid search response.
@@ -193,3 +200,65 @@ class HybridSearchResponse(BaseModel):
 
     # Final merged search results.
     results: List[HybridSearchResult]
+
+
+# This model defines the request body for reranked search.
+class RerankedSearchRequest(BaseModel):
+    # Document ID to search inside.
+    document_id: str
+
+    # User query.
+    query: str
+
+    # Number of retrieval candidates collected before reranking.
+    candidate_top_k: int = Field(default=10, ge=1, le=20)
+
+    # Number of final reranked chunks to return.
+    final_top_k: int = Field(default=5, ge=1, le=10)
+
+    # Retrieval source weights.
+    vector_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+    keyword_weight: float = Field(default=0.3, ge=0.0, le=1.0)
+    graph_weight: float = Field(default=0.2, ge=0.0, le=1.0)
+
+    # Allows graph retrieval to be turned off safely.
+    include_graph: bool = True
+
+
+# This model represents one reranked result.
+class RerankedSearchResult(HybridSearchResult):
+    # Rank before reranking.
+    original_rank: int
+
+    # Final rank after reranking.
+    final_rank: int
+
+    # Query token overlap score.
+    query_overlap_score: float = 0.0
+
+    # Exact phrase overlap score.
+    exact_phrase_score: float = 0.0
+
+    # Entity overlap score.
+    entity_overlap_score: float = 0.0
+
+    # Section-title overlap score.
+    section_title_score: float = 0.0
+
+    # Final reranking score.
+    rerank_score: float
+
+
+# This model defines reranked search response.
+class RerankedSearchResponse(BaseModel):
+    # Document ID searched.
+    document_id: str
+
+    # Original query.
+    query: str
+
+    # Number of results returned.
+    result_count: int
+
+    # Final reranked results.
+    results: List[RerankedSearchResult]

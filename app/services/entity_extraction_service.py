@@ -73,6 +73,18 @@ REDACTION_PLACEHOLDERS = {
 }
 
 
+# Week 14 addition:
+# The small spaCy English model can miss technical terms such as AWS, SQS,
+# BM25, PII, Neo4j, and GPT-4. This regex detects common technical tokens.
+TECHNICAL_TOKEN_PATTERN = re.compile(
+    r"\b(?:"
+    r"[A-Z][A-Z0-9_-]{1,}"              # AWS, SQS, BM25, PII
+    r"|[A-Za-z]+\d+[A-Za-z0-9]*"        # Neo4j, Python3, GPT4o
+    r"|[A-Za-z]+(?:\.[A-Za-z0-9]+)+"    # Dotted technical names
+    r")\b"
+)
+
+
 def load_ner_model() -> Language:
     """
     Load the spaCy NER model.
@@ -259,8 +271,137 @@ def extract_entities_from_text(
             }
         )
 
+    # Remove duplicate entities detected inside the same text.
+    entities = deduplicate_entities(entities)
+
     # Return all useful entities.
     return entities
+
+
+
+def deduplicate_entities(
+    entities: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Remove duplicate entities while preserving their first occurrence.
+
+    Simple meaning:
+    If spaCy and the technical-token fallback both detect the same entity,
+    we should return it only once.
+
+    Deduplication key:
+    normalized_text + label
+    """
+
+    # Final unique entities.
+    unique_entities: List[Dict[str, Any]] = []
+
+    # Store entity keys already seen.
+    seen_keys = set()
+
+    # Loop through all entities.
+    for entity in entities:
+        # Read and clean normalized text.
+        normalized_text = str(
+            entity.get("normalized_text", "")
+        ).strip().lower()
+
+        # Read and clean label.
+        label = str(entity.get("label", "")).strip().upper()
+
+        # Skip invalid entities.
+        if not normalized_text or not label:
+            continue
+
+        # Build a stable duplicate-checking key.
+        key = (normalized_text, label)
+
+        # Skip duplicate entity.
+        if key in seen_keys:
+            continue
+
+        # Remember this entity.
+        seen_keys.add(key)
+
+        # Keep the entity.
+        unique_entities.append(entity)
+
+    # Return unique entities.
+    return unique_entities
+
+
+def extract_query_entities(question: str) -> List[Dict[str, Any]]:
+    """
+    Extract entities from a user's question for Week 14 graph retrieval.
+
+    This function is different from extract_entities_from_text():
+
+    - extract_entities_from_text() is used while processing document chunks.
+    - extract_query_entities() is used every time the user asks a question.
+
+    Example question:
+    "How does Neo4j improve BM25 and Pinecone retrieval?"
+
+    Possible result:
+    [
+        {
+            "text": "Neo4j",
+            "normalized_text": "neo4j",
+            "label": "PRODUCT"
+        },
+        {
+            "text": "BM25",
+            "normalized_text": "bm25",
+            "label": "PRODUCT"
+        }
+    ]
+
+    Only the fields required for graph retrieval are returned.
+    """
+
+    # Empty questions have no entities.
+    if not question or not question.strip():
+        return []
+
+    # First run normal spaCy entity extraction.
+    detected_entities = extract_entities_from_text(text=question)
+
+    # Store compact query entity dictionaries.
+    query_entities: List[Dict[str, Any]] = []
+
+    # Convert normal entity output into query entity output.
+    for entity in detected_entities:
+        query_entities.append(
+            {
+                "text": entity.get("text", ""),
+                "normalized_text": entity.get("normalized_text", ""),
+                "label": entity.get("label", ""),
+            }
+        )
+
+    # Add technical words that spaCy may miss.
+    for match in TECHNICAL_TOKEN_PATTERN.finditer(question):
+        # Clean detected technical token.
+        technical_text = normalize_entity_text(match.group(0))
+
+        # Skip empty or redacted text.
+        if not technical_text:
+            continue
+
+        if is_redaction_placeholder(technical_text):
+            continue
+
+        # Add it as a PRODUCT-style entity.
+        query_entities.append(
+            {
+                "text": technical_text,
+                "normalized_text": technical_text.lower(),
+                "label": "PRODUCT",
+            }
+        )
+
+    # Remove duplicates before returning.
+    return deduplicate_entities(query_entities)
 
 
 def extract_entities_from_chunks(
