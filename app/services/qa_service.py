@@ -1347,7 +1347,13 @@ def normalize_answer_status(answer_status: str) -> str:
 
 
 # This is the main service function used by the /qa route.
-def answer_question(request: QARequest) -> QAResponse:
+def answer_question(
+    request: QARequest,
+    include_graph: bool = True,
+    vector_weight: float = 0.5,
+    keyword_weight: float = 0.3,
+    graph_weight: float = 0.2,
+) -> QAResponse:
     """
     Answer one question using the Week 14 retrieval pipeline.
 
@@ -1376,20 +1382,103 @@ def answer_question(request: QARequest) -> QAResponse:
     requested_top_k = max(int(request.top_k), 1)
     candidate_top_k = min(max(requested_top_k * 3, 10), 20)
 
-    # Run Week 14 hybrid retrieval:
-    # Pinecone vector + BM25 keyword + Neo4j graph retrieval.
-    hybrid_candidates = hybrid_search_document(
-        document_id=request.document_id,
-        query=retrieval_query,
-        top_k=candidate_top_k,
-        vector_top_k=min(candidate_top_k, 20),
-        keyword_top_k=min(candidate_top_k, 20),
-        graph_top_k=min(candidate_top_k, 10),
-        vector_weight=0.5,
-        keyword_weight=0.3,
-        graph_weight=0.2,
-        include_graph=True,
+    # Run Week 14 hybrid retrieval.
+    #
+    # Graph retrieval is now configurable.
+    #
+    # When include_graph=False:
+    #     Pinecone vector search + BM25 are used.
+    #
+    # When include_graph=True:
+    #     Pinecone + BM25 + Neo4j are attempted.
+    #
+    # If graph-enabled retrieval fails, retry without Neo4j.
+    active_graph_weight = (
+        graph_weight
+        if include_graph
+        else 0.0
     )
+
+    # Normalize the active weights so they add up to 1.
+    active_weight_total = (
+        vector_weight
+        + keyword_weight
+        + active_graph_weight
+    )
+
+    if active_weight_total <= 0:
+        raise ValueError(
+            "At least one active retrieval weight "
+            "must be greater than 0."
+        )
+
+    normalized_vector_weight = (
+        vector_weight
+        / active_weight_total
+    )
+
+    normalized_keyword_weight = (
+        keyword_weight
+        / active_weight_total
+    )
+
+    normalized_graph_weight = (
+        active_graph_weight
+        / active_weight_total
+    )
+
+    try:
+        hybrid_candidates = hybrid_search_document(
+            document_id=request.document_id,
+            query=retrieval_query,
+            top_k=candidate_top_k,
+            vector_top_k=min(candidate_top_k, 20),
+            keyword_top_k=min(candidate_top_k, 20),
+            graph_top_k=min(candidate_top_k, 10),
+            vector_weight=normalized_vector_weight,
+            keyword_weight=normalized_keyword_weight,
+            graph_weight=normalized_graph_weight,
+            include_graph=include_graph,
+        )
+
+    except Exception:
+        # If graph was already disabled, this is not a
+        # Neo4j fallback case. Re-raise the real error.
+        if not include_graph:
+            raise
+
+        # Graph-enabled retrieval failed.
+        # Retry using only Pinecone vector search + BM25.
+        fallback_weight_total = (
+            vector_weight
+            + keyword_weight
+        )
+
+        if fallback_weight_total <= 0:
+            raise
+
+        fallback_vector_weight = (
+            vector_weight
+            / fallback_weight_total
+        )
+
+        fallback_keyword_weight = (
+            keyword_weight
+            / fallback_weight_total
+        )
+
+        hybrid_candidates = hybrid_search_document(
+            document_id=request.document_id,
+            query=retrieval_query,
+            top_k=candidate_top_k,
+            vector_top_k=min(candidate_top_k, 20),
+            keyword_top_k=min(candidate_top_k, 20),
+            graph_top_k=min(candidate_top_k, 10),
+            vector_weight=fallback_vector_weight,
+            keyword_weight=fallback_keyword_weight,
+            graph_weight=0.0,
+            include_graph=False,
+        )
 
     # Decide how many chunks the LLM should finally receive.
     # More context is not always better, so keep this small.

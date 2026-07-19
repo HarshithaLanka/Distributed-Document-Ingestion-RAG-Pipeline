@@ -1,0 +1,227 @@
+{
+  "dataset_name": "document_intelligence_rag_evaluation",
+  "version": "1.0",
+  "description": "Golden dataset for evaluating retrieval quality, citation accuracy, faithfulness, and answer-not-found behavior.",
+  "default_top_k": 5,
+  "documents": [
+    {
+      "document_id": "doc_2cad15ad",
+      "document_name": "Document_Intelligence_RAG_16_Week_Roadmap.pdf",
+      "document_type": "roadmap"
+    },
+    {
+      "document_id": "doc_4272f3c4",
+      "document_name": "Soujanya_mam_LOR_final.pdf",
+      "document_type": "letter_of_recommendation"
+    },
+    {
+      "document_id": "doc_e0bea45a",
+      "document_name": "doc (3).pdf",
+      "document_type": "general_document"
+    }
+  ],
+  "evaluation_cases": [
+    {
+  "evaluation_id": "eval_001",
+  "document_id": "doc_308beacb",
+  "question": "What is an RTOS and where is it commonly used?",
+  "category": "direct_fact",
+  "expected_answer_status": "found",
+  "expected_pages": [
+    2
+  ],
+  "expected_chunk_ids": [
+    "chunk_005"
+  ],
+  "expected_keywords": [
+    "real-time operating systems",
+    "events",
+    "deadlines",
+    "industrial control",
+    "flight control"
+  ],
+  "notes": "Chunk 005 defines RTOS and lists example application areas."
+},
+{
+  "evaluation_id": "eval_002",
+  "document_id": "doc_308beacb",
+  "question": "What does determinism mean as an RTOS principle?",
+  "category": "technical_keyword",
+  "expected_answer_status": "found",
+  "expected_pages": [
+    2
+  ],
+  "expected_chunk_ids": [
+    "chunk_007"
+  ],
+  "expected_keywords": [
+    "determinism",
+    "predictable time",
+    "critical task"
+  ],
+  "notes": "Chunk 007 directly explains determinism."
+},
+{
+  "evaluation_id": "eval_003",
+  "document_id": "doc_308beacb",
+  "question": "How does encapsulation work in an RTOS and why is it useful?",
+  "category": "semantic",
+  "expected_answer_status": "found",
+  "expected_pages": [
+    3
+  ],
+  "expected_chunk_ids": [
+    "chunk_016"
+  ],
+  "expected_keywords": [
+    "separate tasks",
+    "well-defined function",
+    "semaphores",
+    "queues",
+    "message passing",
+    "safer",
+    "easier to debug"
+  ],
+  "notes": "Chunk 016 explains both how encapsulation works and its benefits."
+},
+{
+  "evaluation_id": "eval_004",
+  "document_id": "doc_308beacb",
+  "question": "What annual salary does the presentation specify for an RTOS engineer?",
+  "category": "unanswerable",
+  "expected_answer_status": "not_found",
+  "expected_pages": [],
+  "expected_chunk_ids": [],
+  "expected_keywords": [],
+  "notes": "The presentation does not contain salary information."
+},
+
+{
+  "evaluation_id": "eval_005",
+  "document_id": "doc_4272f3c4",
+  "question": "For whom was the recommendation letter written?",
+  "category": "entity",
+  "expected_answer_status": "found",
+  "expected_pages": [
+    1
+  ],
+  "expected_chunk_ids": [
+    "chunk_008",
+    "chunk_011"
+  ],
+  "expected_keywords": [
+    "Likitha Sree Harshitha Lanka",
+    "Master's program"
+  ],
+  "notes": "Chunk 008 introduces the candidate and chunk 011 repeats the recommendation for admission. The source contains OCR spelling errors."
+},
+{
+  "evaluation_id": "eval_006",
+  "document_id": "doc_4272f3c4",
+  "question": "Who wrote the recommendation letter?",
+  "category": "entity_relationship",
+  "expected_answer_status": "found",
+  "expected_pages": [
+    1
+  ],
+  "expected_chunk_ids": [
+    "chunk_003",
+    "chunk_004"
+  ],
+  "expected_keywords": [
+    "S. S. Soujanya Kumari",
+    "Assistant Professor",
+    "Department of Computer Science and Systems Engineering"
+  ],
+  "notes": "Chunks 003 and 004 contain the recommender's name and academic role. The extracted text contains OCR noise."
+},
+{
+  "evaluation_id": "eval_007",
+  "document_id": "doc_4272f3c4",
+  "question": "What qualities and abilities are highlighted about the candidate?",
+  "category": "semantic_multi_chunk",
+  "expected_answer_status": "found",
+  "expected_pages": [
+    1
+  ],
+  "expected_chunk_ids": [
+    "chunk_008",
+    "chunk_009",
+    "chunk_010",
+    "chunk_011"
+  ],
+  "expected_keywords": [
+    "learning ability",
+    "active participation",
+    "perseverance",
+    "initiative",
+    "communication skills",
+    "teamwork",
+    "diligence"
+  ],
+  "notes": "The candidate's academic and personal qualities are distributed across four chunks. Keyword matching may require normalization because of OCR errors."
+},
+{
+  "evaluation_id": "eval_008",
+  "document_id": "doc_e0bea45a",
+  "question": "What was the purpose of the certificate payment?",
+  "category": "direct_fact",
+  "expected_answer_status": "found",
+  "expected_pages": [
+    1
+  ],
+  "expected_chunk_ids": [
+    "chunk_022",
+    "chunk_023"
+  ],
+  "expected_keywords": [
+    "Provisional Certificate"
+  ],
+  "notes": "The field name and value are stored in adjacent chunks."
+},
+{
+  "evaluation_id": "eval_009",
+  "document_id": "doc_e0bea45a",
+  "question": "How much was paid and was the transaction successful?",
+  "category": "multi_fact",
+  "expected_answer_status": "found",
+  "expected_pages": [
+    1
+  ],
+  "expected_chunk_ids": [
+    "chunk_026",
+    "chunk_027",
+    "chunk_038",
+    "chunk_039"
+  ],
+  "expected_keywords": [
+    "200",
+    "Success"
+  ],
+  "notes": "Tests retrieval of the payment amount and transaction status from separate chunks."
+},
+{
+  "evaluation_id": "eval_010",
+  "document_id": "doc_e0bea45a",
+  "question": "Which course and department are listed on the receipt?",
+  "category": "semantic",
+  "expected_answer_status": "found",
+  "expected_pages": [
+    1
+  ],
+  "expected_chunk_ids": [
+    "chunk_015",
+    "chunk_016",
+    "chunk_017",
+    "chunk_018",
+    "chunk_019"
+  ],
+  "expected_keywords": [
+    "B.TECH",
+    "Department of Computer Science and Systems",
+    "Engineering"
+  ],
+  "notes": "The course and department values are split across multiple chunks."
+}
+  ]
+}

@@ -398,24 +398,92 @@ def merge_retrieval_results(
             candidate["retrieval_sources"].append("graph")
 
     # Calculate final weighted score.
+        # Calculate final weighted score for every merged chunk.
     for candidate in merged.values():
+
+        # Calculate the combined hybrid retrieval score.
         candidate["hybrid_score"] = (
             candidate["vector_score"] * vector_weight
             + candidate["keyword_score"] * keyword_weight
             + candidate["graph_score"] * graph_weight
         )
 
-        # Keep old matched_by field for Week 13 compatibility.
-        sources = candidate["retrieval_sources"]
+        # Get all retrieval sources that found this chunk.
+        #
+        # Example:
+        # ["vector"]
+        # ["keyword"]
+        # ["vector", "keyword"]
+        # ["vector", "keyword", "graph"]
+        sources = set(
+            candidate.get(
+                "retrieval_sources",
+                [],
+            )
+        )
 
-        if sources == ["vector"]:
+        # Chunk was found only by Pinecone vector search.
+        if sources == {"vector"}:
             candidate["matched_by"] = "vector"
-        elif sources == ["keyword"]:
+
+        # Chunk was found only by BM25 keyword search.
+        elif sources == {"keyword"}:
             candidate["matched_by"] = "keyword"
-        elif sources == ["graph"]:
+
+        # Chunk was found only by Neo4j graph retrieval.
+        elif sources == {"graph"}:
             candidate["matched_by"] = "graph"
+
+        # Preserve the original Week 13 behavior.
+        #
+        # Vector + BM25 used to be represented as "both".
+        elif sources == {"vector", "keyword"}:
+            candidate["matched_by"] = "both"
+
+        # Any combination involving graph plus another
+        # retrieval source is called "multiple".
+        #
+        # Examples:
+        # vector + graph
+        # keyword + graph
+        # vector + keyword + graph
         else:
             candidate["matched_by"] = "multiple"
+
+        # Keep old matched_by field for Week 13 compatibility.
+        # Keep old matched_by field for Week 13 compatibility.
+#
+# Week 13 behavior:
+# vector only       -> "vector"
+# keyword only      -> "keyword"
+# vector + keyword  -> "both"
+#
+# Week 14 behavior:
+# graph only        -> "graph"
+# any combination involving graph and another retriever
+#                   -> "multiple"
+
+    sources = set(candidate["retrieval_sources"])
+
+    if sources == {"vector"}:
+        candidate["matched_by"] = "vector"
+
+    elif sources == {"keyword"}:
+            candidate["matched_by"] = "keyword"
+
+    elif sources == {"graph"}:
+        candidate["matched_by"] = "graph"
+
+    elif sources == {"vector", "keyword"}:
+    # Preserve Week 13 backward compatibility.
+        candidate["matched_by"] = "both"
+
+    else:
+    # Examples:
+    # vector + graph
+    # keyword + graph
+    # vector + keyword + graph
+        candidate["matched_by"] = "multiple"
 
     # Convert dictionary to list.
     final_results = list(merged.values())

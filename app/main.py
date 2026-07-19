@@ -50,6 +50,10 @@ from app.utils.exceptions import AppException
 # Import logger helper.
 from app.utils.logger import get_logger
 
+from app.routes.evaluation_routes import (
+    router as evaluation_router,
+)
+
 
 # Create a logger for this file.
 # __name__ means this logger will show the file/module name in logs.
@@ -209,3 +213,6 @@ app.include_router(qa_router)
 # Example:
 # GET /documents/{document_id}/entities
 app.include_router(entity_router)
+
+
+app.include_router(evaluation_router)

@@ -93,7 +93,15 @@ def test_get_document_entities_when_neo4j_disabled(monkeypatch):
     assert response.status_code == 503
 
     # Check error message.
-    assert "Neo4j is disabled" in response.json()["detail"]
+    data = response.json()
+
+    assert data["success"] is False
+    assert "error" in data
+
+    assert (
+    "Neo4j is disabled"
+    in data["error"]["message"]
+)
 
 
 def test_get_document_entities_handles_neo4j_error(monkeypatch):
@@ -124,4 +132,12 @@ def test_get_document_entities_handles_neo4j_error(monkeypatch):
     assert response.status_code == 500
 
     # Check clean detail.
-    assert "Failed to fetch entities from Neo4j" in response.json()["detail"]
+    data = response.json()
+
+    assert data["success"] is False
+    assert "error" in data
+
+    assert (
+    "Failed to fetch entities from Neo4j"
+    in data["error"]["message"]
+)

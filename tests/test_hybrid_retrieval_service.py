@@ -70,12 +70,14 @@ def test_hybrid_search_merges_and_deduplicates(monkeypatch):
 
     # Run hybrid search.
     results = hybrid_retrieval_service.hybrid_search_document(
-        document_id="doc_test",
-        query="BM25 hybrid retrieval",
-        top_k=5,
-        vector_weight=0.6,
-        keyword_weight=0.4,
-    )
+    document_id="doc_test",
+    query="BM25 hybrid retrieval",
+    top_k=5,
+    vector_weight=0.6,
+    keyword_weight=0.4,
+    graph_weight=0.0,
+    include_graph=False,
+)
 
     # Extract chunk IDs.
     chunk_ids = [result["chunk_id"] for result in results]

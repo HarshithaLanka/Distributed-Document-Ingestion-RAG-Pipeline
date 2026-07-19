@@ -1,0 +1,548 @@
+{
+  "evaluation_run_id": "20260714T034655Z_30127004",
+  "status": "completed",
+  "dataset_name": "document_intelligence_rag_evaluation",
+  "dataset_version": "1.0",
+  "started_at": "2026-07-14T03:46:55.950096+00:00",
+  "completed_at": "2026-07-14T03:48:05.176241+00:00",
+  "top_k": 5,
+  "candidate_top_k": 10,
+  "run_qa": false,
+  "include_graph": false,
+  "summary": {
+    "total_questions": 10,
+    "successful_cases": 10,
+    "failed_cases": 0,
+    "passed_questions": 9,
+    "failed_questions": 1,
+    "average_precision_at_k": 0.3,
+    "average_recall_at_k": 0.7111,
+    "average_citation_accuracy": null,
+    "average_citation_coverage": null,
+    "average_answer_keyword_coverage": null,
+    "average_context_keyword_coverage": 0.3862,
+    "average_faithfulness_score": null,
+    "answer_status_accuracy": null,
+    "unsupported_answer_rate": null
+  },
+  "results": [
+    {
+      "evaluation_id": "eval_001",
+      "document_id": "doc_308beacb",
+      "question": "What is an RTOS and where is it commonly used?",
+      "category": "direct_fact",
+      "top_k": 5,
+      "expected_chunk_ids": [
+        "chunk_005"
+      ],
+      "expected_pages": [
+        2
+      ],
+      "expected_keywords": [
+        "real-time operating systems",
+        "events",
+        "deadlines",
+        "industrial control",
+        "flight control"
+      ],
+      "expected_answer_status": "found",
+      "retrieved_chunk_ids": [
+        "chunk_004",
+        "chunk_005",
+        "chunk_029",
+        "chunk_031",
+        "chunk_009"
+      ],
+      "retrieved_pages": [
+        2,
+        5
+      ],
+      "retrieved_contexts": [
+        "What is RTOS ?",
+        "Real-time operating systems (RTOS) are used in environments where a large number of events, mostly external to the computer system, must be accepted and processed in a short time or within certain deadlines. such applications are industrial control, telephone switching equipment, flight control, and real-time simulations.",
+        "A queue in RTOS is a FIFO (First-In, First-Out) communication mechanism used to transfer data safely between tasks, and in many RTOSes, between interrupts and tasks. Unlike a semaphore, a queue carries actual data or messages, not just a signal.",
+        "A queue in RTOS is a FIFO (First-In, First-Out) communication mechanism used to transfer data safely between tasks, and in many RTOSes, between interrupts and tasks. Unlike a semaphore, a queue carries actual data or messages, not just a signal.",
+        "Low interrupt latency - The RTOS must react quickly when an interrupt or event occurs."
+      ],
+      "precision_at_k": 0.2,
+      "recall_at_k": 1.0,
+      "answer": null,
+      "actual_answer_status": null,
+      "cited_chunk_ids": [],
+      "cited_pages": [],
+      "citation_accuracy": null,
+      "citation_coverage": null,
+      "answer_keyword_coverage": null,
+      "context_keyword_coverage": 1.0,
+      "faithfulness_score": null,
+      "answer_status_accuracy": null,
+      "passed": true,
+      "error_message": null
+    },
+    {
+      "evaluation_id": "eval_002",
+      "document_id": "doc_308beacb",
+      "question": "What does determinism mean as an RTOS principle?",
+      "category": "technical_keyword",
+      "top_k": 5,
+      "expected_chunk_ids": [
+        "chunk_007"
+      ],
+      "expected_pages": [
+        2
+      ],
+      "expected_keywords": [
+        "determinism",
+        "predictable time",
+        "critical task"
+      ],
+      "expected_answer_status": "found",
+      "retrieved_chunk_ids": [
+        "chunk_004",
+        "chunk_003",
+        "chunk_016",
+        "chunk_009",
+        "chunk_015"
+      ],
+      "retrieved_pages": [
+        2,
+        3
+      ],
+      "retrieved_contexts": [
+        "What is RTOS ?",
+        "RTOS PRINCIPLES",
+        "Encapsulation in RTOS means dividing the system into separate tasks or modules, where each task handles one well-defined function and hides its internal working from the others. Other tasks interact only through proper RTOS mechanisms such as semaphores, queues, or message passing, instead of directly changing each other's internal data. This makes the design cleaner, safer, easier to debug, and easier to maintain as the system grows.",
+        "Low interrupt latency - The RTOS must react quickly when an interrupt or event occurs.",
+        "ENCAPSULATION IN RTOS"
+      ],
+      "precision_at_k": 0.0,
+      "recall_at_k": 0.0,
+      "answer": null,
+      "actual_answer_status": null,
+      "cited_chunk_ids": [],
+      "cited_pages": [],
+      "citation_accuracy": null,
+      "citation_coverage": null,
+      "answer_keyword_coverage": null,
+      "context_keyword_coverage": 0.0,
+      "faithfulness_score": null,
+      "answer_status_accuracy": null,
+      "passed": false,
+      "error_message": null
+    },
+    {
+      "evaluation_id": "eval_003",
+      "document_id": "doc_308beacb",
+      "question": "How does encapsulation work in an RTOS and why is it useful?",
+      "category": "semantic",
+      "top_k": 5,
+      "expected_chunk_ids": [
+        "chunk_016"
+      ],
+      "expected_pages": [
+        3
+      ],
+      "expected_keywords": [
+        "separate tasks",
+        "well-defined function",
+        "semaphores",
+        "queues",
+        "message passing",
+        "safer",
+        "easier to debug"
+      ],
+      "expected_answer_status": "found",
+      "retrieved_chunk_ids": [
+        "chunk_015",
+        "chunk_016",
+        "chunk_002",
+        "chunk_004",
+        "chunk_003"
+      ],
+      "retrieved_pages": [
+        3,
+        1,
+        2
+      ],
+      "retrieved_contexts": [
+        "ENCAPSULATION IN RTOS",
+        "Encapsulation in RTOS means dividing the system into separate tasks or modules, where each task handles one well-defined function and hides its internal working from the others. Other tasks interact only through proper RTOS mechanisms such as semaphores, queues, or message passing, instead of directly changing each other's internal data. This makes the design cleaner, safer, easier to debug, and easier to maintain as the system grows.",
+        "Design issues of RTOS : Principles, Encapsulation Semaphores and Queues, Hard Real-time Scheduling Considerations, Saving Memory Space, Saving Power.",
+        "What is RTOS ?",
+        "RTOS PRINCIPLES"
+      ],
+      "precision_at_k": 0.2,
+      "recall_at_k": 1.0,
+      "answer": null,
+      "actual_answer_status": null,
+      "cited_chunk_ids": [],
+      "cited_pages": [],
+      "citation_accuracy": null,
+      "citation_coverage": null,
+      "answer_keyword_coverage": null,
+      "context_keyword_coverage": 1.0,
+      "faithfulness_score": null,
+      "answer_status_accuracy": null,
+      "passed": true,
+      "error_message": null
+    },
+    {
+      "evaluation_id": "eval_004",
+      "document_id": "doc_308beacb",
+      "question": "What annual salary does the presentation specify for an RTOS engineer?",
+      "category": "unanswerable",
+      "top_k": 5,
+      "expected_chunk_ids": [],
+      "expected_pages": [],
+      "expected_keywords": [],
+      "expected_answer_status": "not_found",
+      "retrieved_chunk_ids": [
+        "chunk_004",
+        "chunk_009",
+        "chunk_011",
+        "chunk_001",
+        "chunk_003"
+      ],
+      "retrieved_pages": [
+        2,
+        1
+      ],
+      "retrieved_contexts": [
+        "What is RTOS ?",
+        "Low interrupt latency - The RTOS must react quickly when an interrupt or event occurs.",
+        "Reliability - RTOS design focuses on stable behavior for critical and embedded applications.",
+        "PRESENTATION EMBEDDED SYSTEMS",
+        "RTOS PRINCIPLES"
+      ],
+      "precision_at_k": 0.0,
+      "recall_at_k": null,
+      "answer": null,
+      "actual_answer_status": null,
+      "cited_chunk_ids": [],
+      "cited_pages": [],
+      "citation_accuracy": null,
+      "citation_coverage": null,
+      "answer_keyword_coverage": null,
+      "context_keyword_coverage": null,
+      "faithfulness_score": null,
+      "answer_status_accuracy": null,
+      "passed": true,
+      "error_message": null
+    },
+    {
+      "evaluation_id": "eval_005",
+      "document_id": "doc_4272f3c4",
+      "question": "For whom was the recommendation letter written?",
+      "category": "entity",
+      "top_k": 5,
+      "expected_chunk_ids": [
+        "chunk_008",
+        "chunk_011"
+      ],
+      "expected_pages": [
+        1
+      ],
+      "expected_keywords": [
+        "Likitha Sree Harshitha Lanka",
+        "Master's program"
+      ],
+      "expected_answer_status": "found",
+      "retrieved_chunk_ids": [
+        "chunk_007",
+        "chunk_008",
+        "chunk_011",
+        "chunk_010",
+        "chunk_009"
+      ],
+      "retrieved_pages": [
+        1
+      ],
+      "retrieved_contexts": [
+        "LETTER gF RECOfoSMEii DATIGi.I",
+        "f am l:ighiy d*light*d io r*cc$tmsnC l,jkirha Sree Harsl'ritha l..anka lirr aiin:ission into tle Masrer's prcgr:ar11 :r: yorl prcstigi.ous university. I canic to know Sree i{arshitha ruhilc teachirry her Digiral Logic l}esign aud \\{icra Fio';cssor. she is one of thc best stucients I havc taught in the past ieu' 1,ears, espccially in tcnns of her lear.ning abi litv antl ;rcti uc pJr-t rctpali()lt.",
+        "She has pffiYer herself to have the ditigence and iatelier,tuai ereativity *eces-qary tc cornplete a graduate degree. [.w+r:ld thereflor+ highiy re*or:rmend Sree Harshitha Lanka f*r admissi*n to yourplogra:n ia her fleld of inters*t. If h*\" pcrf*rrnsr!ffe in my class is any indicaticn cf haw she srar:id padarm as a graduate student, she would l=* an extrei:*o1y positive asset to ysur program. If yr:u have any furth*r questions, please do not hesitate tc ccotaet ?TIF",
+        "At a persc*al level Sree Harsiritha is a ra.eil-discipii**d ilidr:strior.rs str:rlent viiih a ple*saat pers*aality. Nct **iy was she i*terested in and m*tivated ta iram tht material, but she alsa arde:rtly particip*ted ia extra-*urri*ular a+tivities in gnivorsity fests and eveirts. .",
+        "Thr*ughoutthe course, she demonstrated greatp*rsevera*cs, initiative and c*n:ruu*icatiari skills. She display*d her oral arti*ulateness in th* discussion sectisns that were rhe integr*l part of th* course. She aha,ays explained her views veql coneisely and gave supportilrg argur::*nts that were both clear aad persuasive. She alse actively c**:rdi*at*d with g**d teal*ls*rk skills ia the gr*,*p *6$iSErRe.$t*5. She expli*ated pr*+isely h*r **gnizae** ai]*Blt ti:e sui:jrct wldeh iutrigues rnr in hsr exa*rixatian papors and preserrtaii*rrs."
+      ],
+      "precision_at_k": 0.4,
+      "recall_at_k": 1.0,
+      "answer": null,
+      "actual_answer_status": null,
+      "cited_chunk_ids": [],
+      "cited_pages": [],
+      "citation_accuracy": null,
+      "citation_coverage": null,
+      "answer_keyword_coverage": null,
+      "context_keyword_coverage": 0.0,
+      "faithfulness_score": null,
+      "answer_status_accuracy": null,
+      "passed": true,
+      "error_message": null
+    },
+    {
+      "evaluation_id": "eval_006",
+      "document_id": "doc_4272f3c4",
+      "question": "Who wrote the recommendation letter?",
+      "category": "entity_relationship",
+      "top_k": 5,
+      "expected_chunk_ids": [
+        "chunk_003",
+        "chunk_004"
+      ],
+      "expected_pages": [
+        1
+      ],
+      "expected_keywords": [
+        "S. S. Soujanya Kumari",
+        "Assistant Professor",
+        "Department of Computer Science and Systems Engineering"
+      ],
+      "expected_answer_status": "found",
+      "retrieved_chunk_ids": [
+        "chunk_007",
+        "chunk_008",
+        "chunk_011",
+        "chunk_004",
+        "chunk_009"
+      ],
+      "retrieved_pages": [
+        1
+      ],
+      "retrieved_contexts": [
+        "LETTER gF RECOfoSMEii DATIGi.I",
+        "f am l:ighiy d*light*d io r*cc$tmsnC l,jkirha Sree Harsl'ritha l..anka lirr aiin:ission into tle Masrer's prcgr:ar11 :r: yorl prcstigi.ous university. I canic to know Sree i{arshitha ruhilc teachirry her Digiral Logic l}esign aud \\{icra Fio';cssor. she is one of thc best stucients I havc taught in the past ieu' 1,ears, espccially in tcnns of her lear.ning abi litv antl ;rcti uc pJr-t rctpali()lt.",
+        "She has pffiYer herself to have the ditigence and iatelier,tuai ereativity *eces-qary tc cornplete a graduate degree. [.w+r:ld thereflor+ highiy re*or:rmend Sree Harshitha Lanka f*r admissi*n to yourplogra:n ia her fleld of inters*t. If h*\" pcrf*rrnsr!ffe in my class is any indicaticn cf haw she srar:id padarm as a graduate student, she would l=* an extrei:*o1y positive asset to ysur program. If yr:u have any furth*r questions, please do not hesitate tc ccotaet ?TIF",
+        "A*si*tant Professqrr **pertment al *omp*t*r Sei*nce ai;,j $!slerns Engineeiing.",
+        "Thr*ughoutthe course, she demonstrated greatp*rsevera*cs, initiative and c*n:ruu*icatiari skills. She display*d her oral arti*ulateness in th* discussion sectisns that were rhe integr*l part of th* course. She aha,ays explained her views veql coneisely and gave supportilrg argur::*nts that were both clear aad persuasive. She alse actively c**:rdi*at*d with g**d teal*ls*rk skills ia the gr*,*p *6$iSErRe.$t*5. She expli*ated pr*+isely h*r **gnizae** ai]*Blt ti:e sui:jrct wldeh iutrigues rnr in hsr exa*rixatian papors and preserrtaii*rrs."
+      ],
+      "precision_at_k": 0.2,
+      "recall_at_k": 0.5,
+      "answer": null,
+      "actual_answer_status": null,
+      "cited_chunk_ids": [],
+      "cited_pages": [],
+      "citation_accuracy": null,
+      "citation_coverage": null,
+      "answer_keyword_coverage": null,
+      "context_keyword_coverage": 0.0,
+      "faithfulness_score": null,
+      "answer_status_accuracy": null,
+      "passed": true,
+      "error_message": null
+    },
+    {
+      "evaluation_id": "eval_007",
+      "document_id": "doc_4272f3c4",
+      "question": "What qualities and abilities are highlighted about the candidate?",
+      "category": "semantic_multi_chunk",
+      "top_k": 5,
+      "expected_chunk_ids": [
+        "chunk_008",
+        "chunk_009",
+        "chunk_010",
+        "chunk_011"
+      ],
+      "expected_pages": [
+        1
+      ],
+      "expected_keywords": [
+        "learning ability",
+        "active participation",
+        "perseverance",
+        "initiative",
+        "communication skills",
+        "teamwork",
+        "diligence"
+      ],
+      "expected_answer_status": "found",
+      "retrieved_chunk_ids": [
+        "chunk_009",
+        "chunk_011",
+        "chunk_008",
+        "chunk_010",
+        "chunk_004"
+      ],
+      "retrieved_pages": [
+        1
+      ],
+      "retrieved_contexts": [
+        "Thr*ughoutthe course, she demonstrated greatp*rsevera*cs, initiative and c*n:ruu*icatiari skills. She display*d her oral arti*ulateness in th* discussion sectisns that were rhe integr*l part of th* course. She aha,ays explained her views veql coneisely and gave supportilrg argur::*nts that were both clear aad persuasive. She alse actively c**:rdi*at*d with g**d teal*ls*rk skills ia the gr*,*p *6$iSErRe.$t*5. She expli*ated pr*+isely h*r **gnizae** ai]*Blt ti:e sui:jrct wldeh iutrigues rnr in hsr exa*rixatian papors and preserrtaii*rrs.",
+        "She has pffiYer herself to have the ditigence and iatelier,tuai ereativity *eces-qary tc cornplete a graduate degree. [.w+r:ld thereflor+ highiy re*or:rmend Sree Harshitha Lanka f*r admissi*n to yourplogra:n ia her fleld of inters*t. If h*\" pcrf*rrnsr!ffe in my class is any indicaticn cf haw she srar:id padarm as a graduate student, she would l=* an extrei:*o1y positive asset to ysur program. If yr:u have any furth*r questions, please do not hesitate tc ccotaet ?TIF",
+        "f am l:ighiy d*light*d io r*cc$tmsnC l,jkirha Sree Harsl'ritha l..anka lirr aiin:ission into tle Masrer's prcgr:ar11 :r: yorl prcstigi.ous university. I canic to know Sree i{arshitha ruhilc teachirry her Digiral Logic l}esign aud \\{icra Fio';cssor. she is one of thc best stucients I havc taught in the past ieu' 1,ears, espccially in tcnns of her lear.ning abi litv antl ;rcti uc pJr-t rctpali()lt.",
+        "At a persc*al level Sree Harsiritha is a ra.eil-discipii**d ilidr:strior.rs str:rlent viiih a ple*saat pers*aality. Nct **iy was she i*terested in and m*tivated ta iram tht material, but she alsa arde:rtly particip*ted ia extra-*urri*ular a+tivities in gnivorsity fests and eveirts. .",
+        "A*si*tant Professqrr **pertment al *omp*t*r Sei*nce ai;,j $!slerns Engineeiing."
+      ],
+      "precision_at_k": 0.8,
+      "recall_at_k": 1.0,
+      "answer": null,
+      "actual_answer_status": null,
+      "cited_chunk_ids": [],
+      "cited_pages": [],
+      "citation_accuracy": null,
+      "citation_coverage": null,
+      "answer_keyword_coverage": null,
+      "context_keyword_coverage": 0.1429,
+      "faithfulness_score": null,
+      "answer_status_accuracy": null,
+      "passed": true,
+      "error_message": null
+    },
+    {
+      "evaluation_id": "eval_008",
+      "document_id": "doc_e0bea45a",
+      "question": "What was the purpose of the certificate payment?",
+      "category": "direct_fact",
+      "top_k": 5,
+      "expected_chunk_ids": [
+        "chunk_022",
+        "chunk_023"
+      ],
+      "expected_pages": [
+        1
+      ],
+      "expected_keywords": [
+        "Provisional Certificate"
+      ],
+      "expected_answer_status": "found",
+      "retrieved_chunk_ids": [
+        "chunk_007",
+        "chunk_023",
+        "chunk_022",
+        "chunk_005",
+        "chunk_004"
+      ],
+      "retrieved_pages": [
+        1
+      ],
+      "retrieved_contexts": [
+        "Certificates Online Fee Payment Receipt",
+        ": Provisional Certificate",
+        "Purpose Name",
+        "All the students are directed to check all the details before submitting the application. AU is not responsible for errors committed by the students. Dropdowns are only to facilitate students, not auto-generated based on application.",
+        "For any queries, contact concerned examination sections/controller of examinations."
+      ],
+      "precision_at_k": 0.4,
+      "recall_at_k": 1.0,
+      "answer": null,
+      "actual_answer_status": null,
+      "cited_chunk_ids": [],
+      "cited_pages": [],
+      "citation_accuracy": null,
+      "citation_coverage": null,
+      "answer_keyword_coverage": null,
+      "context_keyword_coverage": 1.0,
+      "faithfulness_score": null,
+      "answer_status_accuracy": null,
+      "passed": true,
+      "error_message": null
+    },
+    {
+      "evaluation_id": "eval_009",
+      "document_id": "doc_e0bea45a",
+      "question": "How much was paid and was the transaction successful?",
+      "category": "multi_fact",
+      "top_k": 5,
+      "expected_chunk_ids": [
+        "chunk_026",
+        "chunk_027",
+        "chunk_038",
+        "chunk_039"
+      ],
+      "expected_pages": [
+        1
+      ],
+      "expected_keywords": [
+        "200",
+        "Success"
+      ],
+      "expected_answer_status": "found",
+      "retrieved_chunk_ids": [
+        "chunk_038",
+        "chunk_036",
+        "chunk_034",
+        "chunk_026",
+        "chunk_007"
+      ],
+      "retrieved_pages": [
+        1
+      ],
+      "retrieved_contexts": [
+        "Transaction Status",
+        "Transaction Date",
+        "Transaction ID",
+        "Amount (Rs.)",
+        "Certificates Online Fee Payment Receipt"
+      ],
+      "precision_at_k": 0.4,
+      "recall_at_k": 0.5,
+      "answer": null,
+      "actual_answer_status": null,
+      "cited_chunk_ids": [],
+      "cited_pages": [],
+      "citation_accuracy": null,
+      "citation_coverage": null,
+      "answer_keyword_coverage": null,
+      "context_keyword_coverage": 0.0,
+      "faithfulness_score": null,
+      "answer_status_accuracy": null,
+      "passed": true,
+      "error_message": null
+    },
+    {
+      "evaluation_id": "eval_010",
+      "document_id": "doc_e0bea45a",
+      "question": "Which course and department are listed on the receipt?",
+      "category": "semantic",
+      "top_k": 5,
+      "expected_chunk_ids": [
+        "chunk_015",
+        "chunk_016",
+        "chunk_017",
+        "chunk_018",
+        "chunk_019"
+      ],
+      "expected_pages": [
+        1
+      ],
+      "expected_keywords": [
+        "B.TECH",
+        "Department of Computer Science and Systems",
+        "Engineering"
+      ],
+      "expected_answer_status": "found",
+      "retrieved_chunk_ids": [
+        "chunk_015",
+        "chunk_018",
+        "chunk_007",
+        "chunk_005",
+        "chunk_004"
+      ],
+      "retrieved_pages": [
+        1
+      ],
+      "retrieved_contexts": [
+        "Course Name",
+        ": DEPARTMENT OF COMPUTER SCIENCE AND SYSTEMS",
+        "Certificates Online Fee Payment Receipt",
+        "All the students are directed to check all the details before submitting the application. AU is not responsible for errors committed by the students. Dropdowns are only to facilitate students, not auto-generated based on application.",
+        "For any queries, contact concerned examination sections/controller of examinations."
+      ],
+      "precision_at_k": 0.4,
+      "recall_at_k": 0.4,
+      "answer": null,
+      "actual_answer_status": null,
+      "cited_chunk_ids": [],
+      "cited_pages": [],
+      "citation_accuracy": null,
+      "citation_coverage": null,
+      "answer_keyword_coverage": null,
+      "context_keyword_coverage": 0.3333,
+      "faithfulness_score": null,
+      "answer_status_accuracy": null,
+      "passed": true,
+      "error_message": null
+    }
+  ],
+  "json_report_path": "evaluation\\reports\\evaluation_20260714T034655Z_30127004.json",
+  "markdown_report_path": "evaluation\\reports\\evaluation_20260714T034655Z_30127004.md"
+}

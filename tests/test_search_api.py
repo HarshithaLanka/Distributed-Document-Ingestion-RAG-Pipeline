@@ -144,7 +144,7 @@ def test_vector_search_api_invalid_top_k_returns_400(client):
     )
 
     # Your route says top_k must be between 1 and 10.
-    assert response.status_code == 400
+    assert response.status_code == 422
 
     # Convert response JSON into Python dictionary.
     data = response.json()
@@ -157,7 +157,10 @@ def test_vector_search_api_invalid_top_k_returns_400(client):
     assert "error" in data
 
     # Check message contains top_k validation text.
-    assert "top_k must be between 1 and 10" in data["error"]["message"]
+    # Pydantic validates top_k before the route function runs.
+# The global RequestValidationError handler returns
+# this standard clean validation message.
+    assert data["error"]["message"] == "Request validation failed"
 
 
 # Test 4:
